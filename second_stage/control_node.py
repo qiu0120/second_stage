@@ -52,7 +52,7 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('global_frame', 'vodom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('control_hz', 30.0)
-        self.declare_parameter('initial_state', 'STAGE1_CRUISE_BALL_AND_YELLOW')
+        self.declare_parameter('initial_state', 'STAGE3_GO_FINAL')
         # =========================
         # 状态机状态说明
         # =========================
@@ -71,7 +71,13 @@ class MultiStageOrangeYellowTaskNode(Node):
         #
         # STAGE2_ROTATE_LEFT_90:
         #   第二阶段结束后的左跳转向状态。
-        #   当前实现中执行一次原地左跳，完成后直接进入 STAGE3_CRUISE_BALL_ONLY。
+        #   当前实现中执行一次原地左跳，完成后先进入
+        #   STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME，按仿真时间前进固定时长，
+        #   再进入 STAGE3_CRUISE_BALL_ONLY。
+        #
+        # STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME:
+        #   第二阶段左跳完成后，按仿真时间以固定速度向前走固定时长。
+        #   到时后进入 STAGE3_CRUISE_BALL_ONLY。
         #
         # STAGE3_CRUISE_BALL_ONLY:
         #   第三阶段巡航；主要处理橙球，同时继续看黄线。
@@ -131,7 +137,7 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('orange_s_max', 255)
         self.declare_parameter('orange_v_min', 80)
         self.declare_parameter('orange_v_max', 255)
-        self.declare_parameter('orange_min_contour_area', 90.0)
+        self.declare_parameter('orange_min_contour_area', 400.0)
 
         # =========================
         # 蓝球检测（只用于辅助中线）
@@ -142,7 +148,7 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('blue_s_max', 255)
         self.declare_parameter('blue_v_min', 50)
         self.declare_parameter('blue_v_max', 255)
-        self.declare_parameter('blue_min_contour_area', 90.0)
+        self.declare_parameter('blue_min_contour_area', 400.0)
 
         self.declare_parameter('prefer_nearest_ball', True)
         self.declare_parameter('min_ball_radius_to_trigger', 40.0)
@@ -235,6 +241,12 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('rotate_left_30_tolerance_rad', 0.02)
         self.declare_parameter('rotate_left_30_confirm_count', 3)
         self.declare_parameter('rotate_left_30_wz', 0.15)
+
+        # =========================
+        # 第二段左跳后按仿真时间前进
+        # =========================
+        self.declare_parameter('stage2_forward_after_left_jump_speed', 0.15)
+        self.declare_parameter('stage2_forward_after_left_jump_duration_sec', 1.0)
 
         # =========================
         # 读取参数
@@ -335,6 +347,9 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.rotate_left_30_confirm_count = int(self.get_parameter('rotate_left_30_confirm_count').value)
         self.rotate_left_30_wz = float(self.get_parameter('rotate_left_30_wz').value)
 
+        self.stage2_forward_after_left_jump_speed = float(self.get_parameter('stage2_forward_after_left_jump_speed').value)
+        self.stage2_forward_after_left_jump_duration_sec = float(self.get_parameter('stage2_forward_after_left_jump_duration_sec').value)
+
         # =========================
         # 控制接口
         # =========================
@@ -399,6 +414,8 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.last_ball_done_pose: Optional[Tuple[float, float, float]] = None
 
         self.rotation_target_yaw: Optional[float] = None
+        self.stage2_forward_after_left_jump_start_time_sec: Optional[float] = None
+
 
         self.lateral_align_counter = 0
 
@@ -825,8 +842,19 @@ class MultiStageOrangeYellowTaskNode(Node):
         best_contour = None
         best_score = -1.0
 
+        # STAGE1_CRUISE_BALL_AND_YELLOW 和 STAGE3_CRUISE_BALL_ONLY
+        # 这两个状态不要求黄线候选必须是“前方横线”。
+        require_front_horizontal = self.state not in (
+            'STAGE1_CRUISE_BALL_AND_YELLOW',
+            'STAGE3_CRUISE_BALL_ONLY',
+        )
+
         for cnt in contours:
-            if not self.is_front_horizontal_yellow_line(cnt, roi.shape):
+            area = cv2.contourArea(cnt)
+            if area < self.yellow_min_contour_area:
+                continue
+
+            if require_front_horizontal and not self.is_front_horizontal_yellow_line(cnt, roi.shape):
                 continue
 
             x, y, bw, bh = cv2.boundingRect(cnt)
@@ -885,6 +913,9 @@ class MultiStageOrangeYellowTaskNode(Node):
             ):
                 self.rotate_counter = 0
                 self.rotation_target_yaw = None
+
+            if new_state == 'STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME':
+                self.stage2_forward_after_left_jump_start_time_sec = None
 
             if new_state == 'BALL_LATERAL_ALIGN':
                 self.lateral_align_counter = 0
@@ -1202,7 +1233,7 @@ class MultiStageOrangeYellowTaskNode(Node):
         if self.state == 'STAGE2_ROTATE_LEFT_90':
             self.execute_left_jump_turn(
                 jump_count=1,
-                next_state='STAGE3_CRUISE_BALL_ONLY'
+                next_state='STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME'
             )
             return
 
@@ -1288,6 +1319,31 @@ class MultiStageOrangeYellowTaskNode(Node):
             )
 
             if dist >= self.stage2_forward_after_left_jump_distance_m - self.stage2_forward_after_left_jump_tolerance_m:
+                self.set_state('STAGE3_CRUISE_BALL_ONLY')
+                return
+
+            self.send_velocity_command(self.stage2_forward_after_left_jump_speed, 0.0, 0.0)
+            return
+
+        if self.state == 'STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME':
+            now_sec = self.now_sec()
+            if self.stage2_forward_after_left_jump_start_time_sec is None:
+                self.stage2_forward_after_left_jump_start_time_sec = now_sec
+                self.get_logger().info(
+                    f'STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME start: '
+                    f'sim_time_start={now_sec:.3f}s, '
+                    f'duration={self.stage2_forward_after_left_jump_duration_sec:.3f}s, '
+                    f'speed={self.stage2_forward_after_left_jump_speed:.3f}'
+                )
+
+            elapsed = now_sec - self.stage2_forward_after_left_jump_start_time_sec
+            self.get_logger().info(
+                f'STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME elapsed='
+                f'{elapsed:.3f}/{self.stage2_forward_after_left_jump_duration_sec:.3f}s',
+                throttle_duration_sec=0.5
+            )
+
+            if elapsed >= self.stage2_forward_after_left_jump_duration_sec:
                 self.set_state('STAGE3_CRUISE_BALL_ONLY')
                 return
 
