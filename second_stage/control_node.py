@@ -3,7 +3,7 @@
 
 import math
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 
 import cv2
 import numpy as np
@@ -52,12 +52,78 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('global_frame', 'vodom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('control_hz', 30.0)
-
-        # 测试用：初始状态
         self.declare_parameter('initial_state', 'STAGE1_CRUISE_BALL_AND_YELLOW')
+        # =========================
+        # 状态机状态说明
+        # =========================
+        # STAGE1_CRUISE_BALL_AND_YELLOW:
+        #   第一阶段巡航；沿两排球中间前进，同时看橙球和黄线。
+        #   发现满足条件的橙球时转入 BALL_LATERAL_ALIGN；
+        #   黄线达到第一阶段阈值时转入 STAGE1_ROTATE_LEFT_90。
+        #
+        # STAGE1_ROTATE_LEFT_90:
+        #   第一阶段结束后的左跳转向状态。
+        #   当前实现中执行一次原地左跳，完成后直接进入 STAGE2_CRUISE_YELLOW_ONLY。
+        #
+        # STAGE2_CRUISE_YELLOW_ONLY:
+        #   第二阶段巡航；只看黄线，不处理橙球。
+        #   黄线达到第二阶段阈值时转入 STAGE2_ROTATE_LEFT_90。
+        #
+        # STAGE2_ROTATE_LEFT_90:
+        #   第二阶段结束后的左跳转向状态。
+        #   当前实现中执行一次原地左跳，完成后直接进入 STAGE3_CRUISE_BALL_ONLY。
+        #
+        # STAGE3_CRUISE_BALL_ONLY:
+        #   第三阶段巡航；主要处理橙球，同时继续看黄线。
+        #   发现满足条件的橙球时转入 BALL_LATERAL_ALIGN；
+        #   黄线达到第三阶段阈值时转入 STAGE3_ROTATE_BACK_180。
+        #
+        # STAGE3_ROTATE_BACK_180:
+        #   第三阶段末尾回转状态。
+        #   当前实现中连续执行两次原地左跳，近似代替 180° 掉头，
+        #   完成后进入 STAGE3_FINAL_DECISION。
+        #
+        # STAGE3_FINAL_DECISION:
+        #   第三阶段末尾决策状态。
+        #   根据 orange_hit_count 判断是否已完成 4 个橙球：
+        #   已完成则进入 STAGE3_GO_FINAL，否则进入 STAGE3_GO_SCAN。
+        #
+        # STAGE3_GO_SCAN:
+        #   前往补扫区域的巡航状态。
+        #   走到 yellow_ratio_scan 对应黄线位置后进入 STAGE3_SCAN_AND_HIT_LAST。
+        #
+        # STAGE3_SCAN_AND_HIT_LAST:
+        #   在补扫区域寻找最后一个橙球。
+        #   找到目标球则进入 BALL_LATERAL_ALIGN，未找到则继续巡航。
+        #
+        # STAGE3_GO_FINAL:
+        #   前往最终出口线的巡航状态。
+        #   黄线达到 yellow_ratio_final 后进入 STAGE3_ROTATE_LEFT_30。
+        #
+        # STAGE3_ROTATE_LEFT_30:
+        #   最终出口前的小角度修正状态。
+        #   通过 TF 朝向闭环左转约 30°，完成后进入 DONE。
+        #
+        # BALL_LATERAL_ALIGN:
+        #   撞球子状态 1：横向对齐球。
+        #   采用“小 vx + 主 vy”边前进边横移，把目标橙球送到机器狗正前方。
+        #
+        # BALL_HIT_CONFIRM_FORWARD:
+        #   撞球子状态 2：确认后直接前冲撞击。
+        #   进入时记录目标球深度，用“球深 + 额外前冲距离”生成撞击距离，
+        #   并用 TF 位移判断撞击是否完成。
+        #
+        # BALL_POST_HIT_SIDE_SHIFT:
+        #   撞球子状态 3：撞完后只做左右横移。
+        #   撞左球则向右移，撞右球则向左移。
+        #   横移固定距离完成后直接回到保存的巡航状态 ball_return_state。
+        #
+        # DONE:
+        #   全流程结束状态。
+        #   持续发送停止命令，任务完成。
 
         # =========================
-        # 橙色球检测参数
+        # 橙球检测
         # =========================
         self.declare_parameter('orange_h_min', 5)
         self.declare_parameter('orange_h_max', 25)
@@ -65,23 +131,35 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('orange_s_max', 255)
         self.declare_parameter('orange_v_min', 80)
         self.declare_parameter('orange_v_max', 255)
-        self.declare_parameter('orange_min_contour_area', 60.0)
-        self.declare_parameter('prefer_nearest_ball', True)
-        self.declare_parameter('min_ball_radius_to_trigger', 29.0)
+        self.declare_parameter('orange_min_contour_area', 90.0)
 
         # =========================
-        # depth 搜索（橙球距离用）
+        # 蓝球检测（只用于辅助中线）
+        # =========================
+        self.declare_parameter('blue_h_min', 90)
+        self.declare_parameter('blue_h_max', 130)
+        self.declare_parameter('blue_s_min', 80)
+        self.declare_parameter('blue_s_max', 255)
+        self.declare_parameter('blue_v_min', 50)
+        self.declare_parameter('blue_v_max', 255)
+        self.declare_parameter('blue_min_contour_area', 90.0)
+
+        self.declare_parameter('prefer_nearest_ball', True)
+        self.declare_parameter('min_ball_radius_to_trigger', 40.0)
+
+        # =========================
+        # 深度搜索
         # =========================
         self.declare_parameter('depth_search_half', 12)
         self.declare_parameter('valid_min_depth_m', 0.05)
         self.declare_parameter('valid_max_depth_m', 10.0)
 
         # =========================
-        # 黄线检测参数
+        # 黄线检测
         # =========================
         self.declare_parameter('yellow_roi_top_ratio', 0.45)
-        self.declare_parameter('yellow_roi_left_ratio', 0.35)
-        self.declare_parameter('yellow_roi_right_ratio', 0.65)
+        self.declare_parameter('yellow_roi_left_ratio', 0.4)
+        self.declare_parameter('yellow_roi_right_ratio', 0.6)
 
         self.declare_parameter('yellow_h_min', 15)
         self.declare_parameter('yellow_h_max', 40)
@@ -91,70 +169,57 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('yellow_v_max', 255)
         self.declare_parameter('yellow_min_contour_area', 600.0)
 
-        # 只接受“前方横线”的几何约束
         self.declare_parameter('yellow_min_width_height_ratio', 2.0)
-        self.declare_parameter('yellow_max_tilt_deg', 20.0)
+        self.declare_parameter('yellow_max_tilt_deg', 30.0)
         self.declare_parameter('yellow_center_tolerance_ratio', 0.28)
         self.declare_parameter('yellow_min_width_ratio', 0.18)
 
         self.declare_parameter('yellow_stop_line_y_ratio_stage1', 1.0)
         self.declare_parameter('yellow_stop_line_y_ratio_stage2', 0.77)
-        self.declare_parameter('yellow_stop_line_y_ratio_stage3', 0.7)
-        self.declare_parameter('yellow_stop_confirm_count', 3)
+        self.declare_parameter('yellow_stop_line_y_ratio_stage3', 0.8)
+        self.declare_parameter('yellow_stop_confirm_count', 1)
 
-        # 第三段收尾两条线
         self.declare_parameter('yellow_ratio_scan', 0.6)
         self.declare_parameter('yellow_ratio_final', 0.9)
 
         # =========================
-        # 巡航 / 搜索 / 对准
+        # 巡航 / 中线
         # =========================
-        self.declare_parameter('cruise_forward_speed', 0.15)
-        self.declare_parameter('turn_trigger_distance_m', 0.5)
+        self.declare_parameter('cruise_forward_speed', 0.2)
+        self.declare_parameter('turn_trigger_distance_m', 0.4)
 
-        self.declare_parameter('align_tolerance_px', 10)
-        self.declare_parameter('align_confirm_count', 3)
-        self.declare_parameter('align_turn_wz', 0.15)
-
-        # =========================
-        # 橙球碰撞模式
-        # =========================
-        self.declare_parameter('pre_collision_forward_speed', 0.15)
-        self.declare_parameter('collision_trigger_distance_m', 0.20)
-        self.declare_parameter('collision_forward_speed', 0.15)
-        self.declare_parameter('collision_forward_distance_m', 0.25)
-        self.declare_parameter('settle_after_collision_sec', 0.0)
+        self.declare_parameter('center_cruise_vy_gain', 0.15)
+        self.declare_parameter('center_cruise_vy_max', 0.10)
+        self.declare_parameter('center_ok_px', 18.0)
 
         # =========================
-        # 返回控制
+        # 对齐球阶段：小 vx + 主 vy
         # =========================
-        self.declare_parameter('backward_speed', 0.15)
-        self.declare_parameter('collision_return_tolerance_m', 0.08)
-        self.declare_parameter('preturn_return_tolerance_m', 0.08)
-        self.declare_parameter('return_yaw_tolerance_rad', 0.03)
+        self.declare_parameter('lateral_align_forward_speed', 0.06)
+        self.declare_parameter('lateral_align_vy_gain', 0.18)
+        self.declare_parameter('lateral_align_vy_max', 0.15)
+        self.declare_parameter('lateral_align_vy_min', 0.10)
+        self.declare_parameter('lateral_align_px_tol', 20.0)
+        self.declare_parameter('lateral_align_confirm_count', 1)
 
-        self.declare_parameter('return_lateral_kp', 0.5)
-        self.declare_parameter('return_max_vy', 0.06)
+        # =========================
+        # 撞击 / 回退
+        # =========================
+        self.declare_parameter('hit_forward_speed', 0.10)
+        self.declare_parameter('hit_extra_distance_m', 0.05)
 
-        self.declare_parameter('restore_turn_wz', 0.15)
-        self.declare_parameter('restore_confirm_count', 3)
+        self.declare_parameter('backoff_speed', 0.10)
+        self.declare_parameter('backoff_distance_m', 0.10)
 
-        # 返回到 0.2m 深度的确认
-        self.declare_parameter('return_depth_tolerance_m', 0.015)
-        self.declare_parameter('return_depth_confirm_count', 1)
+        # 撞完后先按左右无条件偏一段
+        self.declare_parameter('post_hit_side_shift_distance_m', 0.30)
+        self.declare_parameter('post_hit_side_shift_speed', 0.15)
 
         # =========================
         # 防重复撞同一颗球
         # =========================
-        self.declare_parameter('ball_retrigger_cooldown_sec', 2.0)
-        self.declare_parameter('ball_retrigger_min_travel_m', 0.5)
-
-        # =========================
-        # 第一段固定右移
-        # =========================
-        self.declare_parameter('right_speed', 0.05)
-        self.declare_parameter('stage1_right_shift_distance_m', 0.01)
-        self.declare_parameter('stage1_right_shift_tolerance_m', 0.005)
+        self.declare_parameter('ball_retrigger_cooldown_sec', 1.2)
+        self.declare_parameter('ball_retrigger_min_travel_m', 0.25)
 
         # =========================
         # TF 旋转参数
@@ -171,6 +236,9 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('rotate_left_30_confirm_count', 3)
         self.declare_parameter('rotate_left_30_wz', 0.15)
 
+        # =========================
+        # 读取参数
+        # =========================
         self.rgb_topic = self.get_parameter('rgb_topic').value
         self.depth_topic = self.get_parameter('depth_topic').value
         self.global_frame = self.get_parameter('global_frame').value
@@ -185,6 +253,15 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.orange_v_min = int(self.get_parameter('orange_v_min').value)
         self.orange_v_max = int(self.get_parameter('orange_v_max').value)
         self.orange_min_contour_area = float(self.get_parameter('orange_min_contour_area').value)
+
+        self.blue_h_min = int(self.get_parameter('blue_h_min').value)
+        self.blue_h_max = int(self.get_parameter('blue_h_max').value)
+        self.blue_s_min = int(self.get_parameter('blue_s_min').value)
+        self.blue_s_max = int(self.get_parameter('blue_s_max').value)
+        self.blue_v_min = int(self.get_parameter('blue_v_min').value)
+        self.blue_v_max = int(self.get_parameter('blue_v_max').value)
+        self.blue_min_contour_area = float(self.get_parameter('blue_min_contour_area').value)
+
         self.prefer_nearest_ball = bool(self.get_parameter('prefer_nearest_ball').value)
         self.min_ball_radius_to_trigger = float(self.get_parameter('min_ball_radius_to_trigger').value)
 
@@ -219,34 +296,32 @@ class MultiStageOrangeYellowTaskNode(Node):
 
         self.cruise_forward_speed = float(self.get_parameter('cruise_forward_speed').value)
         self.turn_trigger_distance_m = float(self.get_parameter('turn_trigger_distance_m').value)
-        self.align_tolerance_px = int(self.get_parameter('align_tolerance_px').value)
-        self.align_confirm_count = int(self.get_parameter('align_confirm_count').value)
-        self.align_turn_wz = float(self.get_parameter('align_turn_wz').value)
 
-        self.pre_collision_forward_speed = float(self.get_parameter('pre_collision_forward_speed').value)
-        self.collision_trigger_distance_m = float(self.get_parameter('collision_trigger_distance_m').value)
-        self.collision_forward_speed = float(self.get_parameter('collision_forward_speed').value)
-        self.collision_forward_distance_m = float(self.get_parameter('collision_forward_distance_m').value)
-        self.settle_after_collision_sec = float(self.get_parameter('settle_after_collision_sec').value)
+        self.center_cruise_vy_gain = float(self.get_parameter('center_cruise_vy_gain').value)
+        self.center_cruise_vy_max = float(self.get_parameter('center_cruise_vy_max').value)
+        self.center_ok_px = float(self.get_parameter('center_ok_px').value)
 
-        self.backward_speed = float(self.get_parameter('backward_speed').value)
-        self.collision_return_tolerance_m = float(self.get_parameter('collision_return_tolerance_m').value)
-        self.preturn_return_tolerance_m = float(self.get_parameter('preturn_return_tolerance_m').value)
-        self.return_yaw_tolerance_rad = float(self.get_parameter('return_yaw_tolerance_rad').value)
-        self.return_lateral_kp = float(self.get_parameter('return_lateral_kp').value)
-        self.return_max_vy = float(self.get_parameter('return_max_vy').value)
-        self.restore_turn_wz = float(self.get_parameter('restore_turn_wz').value)
-        self.restore_confirm_count = int(self.get_parameter('restore_confirm_count').value)
+        self.lateral_align_forward_speed = float(self.get_parameter('lateral_align_forward_speed').value)
+        self.lateral_align_vy_gain = float(self.get_parameter('lateral_align_vy_gain').value)
+        self.lateral_align_vy_max = float(self.get_parameter('lateral_align_vy_max').value)
+        self.lateral_align_vy_min = float(self.get_parameter('lateral_align_vy_min').value)
+        self.lateral_align_px_tol = float(self.get_parameter('lateral_align_px_tol').value)
+        self.lateral_align_confirm_count = int(self.get_parameter('lateral_align_confirm_count').value)
 
-        self.return_depth_tolerance_m = float(self.get_parameter('return_depth_tolerance_m').value)
-        self.return_depth_confirm_count = int(self.get_parameter('return_depth_confirm_count').value)
+        self.hit_forward_speed = float(self.get_parameter('hit_forward_speed').value)
+        self.hit_extra_distance_m = float(self.get_parameter('hit_extra_distance_m').value)
+
+        self.backoff_speed = float(self.get_parameter('backoff_speed').value)
+        self.backoff_distance_m = float(self.get_parameter('backoff_distance_m').value)
+
+        self.post_hit_side_shift_distance_m = float(self.get_parameter('post_hit_side_shift_distance_m').value)
+        self.post_hit_side_shift_speed = float(self.get_parameter('post_hit_side_shift_speed').value)
+
 
         self.ball_retrigger_cooldown_sec = float(self.get_parameter('ball_retrigger_cooldown_sec').value)
         self.ball_retrigger_min_travel_m = float(self.get_parameter('ball_retrigger_min_travel_m').value)
 
-        self.right_speed = float(self.get_parameter('right_speed').value)
-        self.stage1_right_shift_distance_m = float(self.get_parameter('stage1_right_shift_distance_m').value)
-        self.stage1_right_shift_tolerance_m = float(self.get_parameter('stage1_right_shift_tolerance_m').value)
+
 
         self.rotate_left_90_tolerance_rad = float(self.get_parameter('rotate_left_90_tolerance_rad').value)
         self.rotate_left_90_confirm_count = int(self.get_parameter('rotate_left_90_confirm_count').value)
@@ -260,6 +335,9 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.rotate_left_30_confirm_count = int(self.get_parameter('rotate_left_30_confirm_count').value)
         self.rotate_left_30_wz = float(self.get_parameter('rotate_left_30_wz').value)
 
+        # =========================
+        # 控制接口
+        # =========================
         self.Ctrl = Robot_Ctrl()
         self.Ctrl.run()
         self.msg = robot_control_cmd_lcmt()
@@ -287,6 +365,16 @@ class MultiStageOrangeYellowTaskNode(Node):
             'aligned': False,
             'depth_center': None,
             'depth_box': None,
+
+            'orange_balls': [],
+            'blue_balls': [],
+            'left_balls': [],
+            'right_balls': [],
+            'has_center_reference': False,
+            'center_error_px': None,
+            'left_ref': None,
+            'right_ref': None,
+            'best_target_ball': None,
         }
 
         self.latest_yellow_result = {
@@ -299,29 +387,28 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.state = self.initial_state
         self.ball_return_state = self.initial_state
 
-        self.align_counter = 0
-        self.restore_counter = 0
         self.yellow_stop_counter = 0
         self.rotate_counter = 0
 
+        # 第一阶段黄线“到底后出图”逻辑
+        self.stage1_yellow_touched_bottom = False
+        self.stage1_yellow_disappear_counter = 0
+
         self.pre_turn_pose: Optional[Tuple[float, float, float]] = None
-        self.collision_start_pose: Optional[Tuple[float, float, float]] = None
-        self.settle_deadline_sec: Optional[float] = None
-
-        self.align_yaw_delta: Optional[float] = None
-        self.restore_start_yaw: Optional[float] = None
-
-        self.align_pose: Optional[Tuple[float, float, float]] = None
-        self.pose_at_0p2: Optional[Tuple[float, float, float]] = None
-        self.depth_return_counter = 0
-        self.segment_start_pose: Optional[Tuple[float, float, float]] = None
-        self.align_to_0p2_distance_m: float = 0.0
-
         self.last_ball_done_time_sec: Optional[float] = None
         self.last_ball_done_pose: Optional[Tuple[float, float, float]] = None
 
         self.rotation_target_yaw: Optional[float] = None
-        self.stage1_right_shift_start_pose: Optional[Tuple[float, float, float]] = None
+
+        self.lateral_align_counter = 0
+
+        self.hit_start_pose: Optional[Tuple[float, float, float]] = None
+        self.hit_start_depth_m: Optional[float] = None
+        self.hit_forward_target_distance_m: float = 0.0
+
+        self.post_hit_side_shift_start_pose: Optional[Tuple[float, float, float]] = None
+        self.last_hit_side: Optional[str] = None
+        self.side_shift_done: bool = False
 
         self.orange_hit_count = 0
 
@@ -339,11 +426,29 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.get_logger().info(f'depth_topic={self.depth_topic}')
         self.get_logger().info(f'tf: {self.global_frame} -> {self.base_frame}')
 
+    # ============================================================
+    # 基础工具
+    # ============================================================
+    def planar_distance(self, pose0: Tuple[float, float, float], pose1: Tuple[float, float, float]) -> float:
+        x0, y0, _ = pose0
+        x1, y1, _ = pose1
+        return math.hypot(x1 - x0, y1 - y0)
+
+    def apply_min_abs_velocity(self, v: float, v_min: float, deadband: float = 0.0) -> float:
+        if abs(v) <= deadband:
+            return 0.0
+        if 0.0 < abs(v) < v_min:
+            return math.copysign(v_min, v)
+        return v
+
     def _inc_life_count(self):
         self.msg.life_count += 1
         if self.msg.life_count > 127:
             self.msg.life_count = 0
 
+    # ============================================================
+    # 控制
+    # ============================================================
     def send_stop_command(self):
         self.msg.mode = 12
         self.msg.gait_id = 0
@@ -359,15 +464,11 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.msg.step_height = [0.02, 0.02]
         self.msg.rpy_des = [0.0, 0.0, 0.0]
         self.Ctrl.Send_cmd(self.msg)
+        self.get_logger().info(
+            f'[CMD] vel_des=[{vx:.3f}, {vy:.3f}, {wz:.3f}]',
+            throttle_duration_sec=0.3
+        )
 
-    def send_move_right_command(self, speed: float):
-        self.msg.mode = 11
-        self.msg.gait_id = 3
-        self._inc_life_count()
-        self.msg.vel_des = [0.0, -speed, 0.0]
-        self.msg.step_height = [0.02, 0.02]
-        self.msg.rpy_des = [0.0, 0.0, 0.0]
-        self.Ctrl.Send_cmd(self.msg)
 
     def send_left_jump_action_once(self):
         self.msg.mode = 16
@@ -383,7 +484,6 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.Ctrl.Wait_finish(12, 0)
 
     def execute_left_jump_turn(self, jump_count: int, next_state: str):
-        self.send_stop_command()
         for _ in range(jump_count):
             self.send_left_jump_action_once()
         self.set_state(next_state)
@@ -391,6 +491,9 @@ class MultiStageOrangeYellowTaskNode(Node):
     def now_sec(self) -> float:
         return self.get_clock().now().nanoseconds / 1e9
 
+    # ============================================================
+    # TF
+    # ============================================================
     def get_current_pose(self) -> Optional[Tuple[float, float, float]]:
         try:
             tf_msg = self.tf_buffer.lookup_transform(self.global_frame, self.base_frame, Time())
@@ -424,6 +527,9 @@ class MultiStageOrangeYellowTaskNode(Node):
         )
         return cooldown_ok and travel_ok
 
+    # ============================================================
+    # 图像回调
+    # ============================================================
     def depth_callback(self, msg: Image):
         try:
             depth_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -441,9 +547,12 @@ class MultiStageOrangeYellowTaskNode(Node):
             self.get_logger().error(f'cv_bridge convert failed: {e}')
             return
 
-        self.latest_ball_result = self.detect_orange_ball_with_depth(frame)
+        self.latest_ball_result = self.detect_ball_scene(frame)
         self.latest_yellow_result = self.detect_yellow_stop_line(frame)
 
+    # ============================================================
+    # 深度查值
+    # ============================================================
     def get_depth_for_rgb_point(self, rgb_cx: int, rgb_cy: int):
         if self.latest_depth is None or self.latest_depth_encoding is None:
             return None, None, None
@@ -478,17 +587,28 @@ class MultiStageOrangeYellowTaskNode(Node):
         depth_m = float(np.percentile(valid, 20))
         return depth_m, (depth_cx, depth_cy), (x1, y1, x2, y2)
 
-    def detect_orange_ball_with_depth(self, frame: np.ndarray) -> dict:
+    # ============================================================
+    # 球检测
+    # ============================================================
+    def detect_color_ball_candidates(
+        self,
+        frame: np.ndarray,
+        h_min: int, h_max: int,
+        s_min: int, s_max: int,
+        v_min: int, v_max: int,
+        min_contour_area: float,
+        color_name: str
+    ) -> List[Dict]:
         h, w = frame.shape[:2]
         self.rgb_w = w
         self.rgb_h = h
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        lower_orange = np.array([self.orange_h_min, self.orange_s_min, self.orange_v_min], dtype=np.uint8)
-        upper_orange = np.array([self.orange_h_max, self.orange_s_max, self.orange_v_max], dtype=np.uint8)
+        lower = np.array([h_min, s_min, v_min], dtype=np.uint8)
+        upper = np.array([h_max, s_max, v_max], dtype=np.uint8)
 
-        mask = cv2.inRange(hsv, lower_orange, upper_orange)
+        mask = cv2.inRange(hsv, lower, upper)
 
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -499,13 +619,20 @@ class MultiStageOrangeYellowTaskNode(Node):
         candidates = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area < self.orange_min_contour_area:
+            if area < min_contour_area:
                 continue
 
-            (cx, cy), radius = cv2.minEnclosingCircle(cnt)
-            cx = int(cx)
-            cy = int(cy)
-            radius = float(radius)
+            # 圆心仍然用最小外接圆
+            (cx_f, cy_f), r_circle = cv2.minEnclosingCircle(cnt)
+            cx = int(cx_f)
+            cy = int(cy_f)
+            r_circle = float(r_circle)
+
+            # 面积等效半径
+            r_eq = math.sqrt(area / math.pi)
+
+            # 最终半径：只信较小的那个
+            radius = min(r_circle, r_eq)
 
             depth_m, depth_center, depth_box = self.get_depth_for_rgb_point(cx, cy)
             if depth_m is None:
@@ -513,18 +640,79 @@ class MultiStageOrangeYellowTaskNode(Node):
 
             image_center_x = w // 2
             error_x = cx - image_center_x
+            side = 'left' if cx < image_center_x else 'right'
 
             candidates.append({
+                'color': color_name,
                 'center': (cx, cy),
                 'radius': radius,
+                'radius_circle': r_circle,
+                'radius_eq': r_eq,
                 'area': float(area),
                 'depth_m': depth_m,
                 'error_x': int(error_x),
                 'depth_center': depth_center,
                 'depth_box': depth_box,
+                'side': side,
             })
 
-        if len(candidates) == 0:
+        return candidates
+
+    def choose_side_reference_ball(self, balls: List[Dict]) -> Optional[Dict]:
+        if len(balls) == 0:
+            return None
+        return min(balls, key=lambda b: b['depth_m'])
+
+    def choose_best_target_orange_ball(self, orange_balls: List[Dict]) -> Optional[Dict]:
+        if len(orange_balls) == 0:
+            return None
+        if self.prefer_nearest_ball:
+            return min(orange_balls, key=lambda b: b['depth_m'])
+        return min(orange_balls, key=lambda b: b['depth_m'] + 0.002 * abs(b['error_x']))
+
+    def detect_ball_scene(self, frame: np.ndarray) -> Dict:
+        h, w = frame.shape[:2]
+        self.rgb_w = w
+        self.rgb_h = h
+
+        orange_balls = self.detect_color_ball_candidates(
+            frame,
+            self.orange_h_min, self.orange_h_max,
+            self.orange_s_min, self.orange_s_max,
+            self.orange_v_min, self.orange_v_max,
+            self.orange_min_contour_area,
+            'orange'
+        )
+
+        blue_balls = self.detect_color_ball_candidates(
+            frame,
+            self.blue_h_min, self.blue_h_max,
+            self.blue_s_min, self.blue_s_max,
+            self.blue_v_min, self.blue_v_max,
+            self.blue_min_contour_area,
+            'blue'
+        )
+
+        all_balls = orange_balls + blue_balls
+        image_center_x = w // 2
+
+        left_balls = [b for b in all_balls if b['center'][0] < image_center_x]
+        right_balls = [b for b in all_balls if b['center'][0] >= image_center_x]
+
+        left_ref = self.choose_side_reference_ball(left_balls)
+        right_ref = self.choose_side_reference_ball(right_balls)
+
+        has_center_reference = (left_ref is not None and right_ref is not None)
+        center_error_px = None
+        if has_center_reference:
+            left_cx = left_ref['center'][0]
+            right_cx = right_ref['center'][0]
+            lane_mid_x = 0.5 * (left_cx + right_cx)
+            center_error_px = lane_mid_x - image_center_x
+
+        best_target_ball = self.choose_best_target_orange_ball(orange_balls)
+
+        if best_target_ball is None:
             return {
                 'has_ball': False,
                 'ball_center': None,
@@ -535,29 +723,45 @@ class MultiStageOrangeYellowTaskNode(Node):
                 'aligned': False,
                 'depth_center': None,
                 'depth_box': None,
+
+                'orange_balls': orange_balls,
+                'blue_balls': blue_balls,
+                'left_balls': left_balls,
+                'right_balls': right_balls,
+                'has_center_reference': has_center_reference,
+                'center_error_px': center_error_px,
+                'left_ref': left_ref,
+                'right_ref': right_ref,
+                'best_target_ball': None,
             }
-
-        if self.prefer_nearest_ball:
-            best = min(candidates, key=lambda c: c['depth_m'])
-        else:
-            best = min(candidates, key=lambda c: c['depth_m'] + 0.002 * abs(c['error_x']))
-
-        aligned = abs(best['error_x']) <= self.align_tolerance_px
 
         return {
             'has_ball': True,
-            'ball_center': best['center'],
-            'ball_radius': best['radius'],
-            'ball_depth_m': best['depth_m'],
+            'ball_center': best_target_ball['center'],
+            'ball_radius': best_target_ball['radius'],
+            'ball_depth_m': best_target_ball['depth_m'],
             'img_shape': (h, w),
-            'error_x': best['error_x'],
-            'aligned': aligned,
-            'depth_center': best['depth_center'],
-            'depth_box': best['depth_box'],
+            'error_x': best_target_ball['error_x'],
+            'aligned': abs(best_target_ball['error_x']) <= self.lateral_align_px_tol,
+            'depth_center': best_target_ball['depth_center'],
+            'depth_box': best_target_ball['depth_box'],
+
+            'orange_balls': orange_balls,
+            'blue_balls': blue_balls,
+            'left_balls': left_balls,
+            'right_balls': right_balls,
+            'has_center_reference': has_center_reference,
+            'center_error_px': center_error_px,
+            'left_ref': left_ref,
+            'right_ref': right_ref,
+            'best_target_ball': best_target_ball,
         }
 
+    # ============================================================
+    # 黄线检测
+    # ============================================================
     def is_front_horizontal_yellow_line(self, cnt, roi_shape) -> bool:
-        roi_h, roi_w = roi_shape[:2]
+        _, roi_w = roi_shape[:2]
 
         area = cv2.contourArea(cnt)
         if area < self.yellow_min_contour_area:
@@ -626,7 +830,7 @@ class MultiStageOrangeYellowTaskNode(Node):
                 continue
 
             x, y, bw, bh = cv2.boundingRect(cnt)
-            score = bw * 1.0 + (y + bh) * 0.5
+            score = y + bh
 
             if score > best_score:
                 best_score = score
@@ -652,6 +856,9 @@ class MultiStageOrangeYellowTaskNode(Node):
             'img_shape': (h, w),
         }
 
+    # ============================================================
+    # 状态切换
+    # ============================================================
     def set_state(self, new_state: str):
         if new_state != self.state:
             self.get_logger().info(f'STATE: {self.state} -> {new_state}')
@@ -666,6 +873,10 @@ class MultiStageOrangeYellowTaskNode(Node):
             ):
                 self.yellow_stop_counter = 0
 
+            if new_state == 'STAGE1_CRUISE_BALL_AND_YELLOW':
+                self.stage1_yellow_touched_bottom = False
+                self.stage1_yellow_disappear_counter = 0
+
             if new_state in (
                 'STAGE1_ROTATE_LEFT_90',
                 'STAGE2_ROTATE_LEFT_90',
@@ -675,9 +886,21 @@ class MultiStageOrangeYellowTaskNode(Node):
                 self.rotate_counter = 0
                 self.rotation_target_yaw = None
 
-            if new_state == 'STAGE1_MOVE_RIGHT_FIXED_DISTANCE':
-                self.stage1_right_shift_start_pose = None
+            if new_state == 'BALL_LATERAL_ALIGN':
+                self.lateral_align_counter = 0
 
+            if new_state == 'BALL_HIT_CONFIRM_FORWARD':
+                self.hit_start_pose = None
+                self.hit_start_depth_m = None
+                self.hit_forward_target_distance_m = 0.0
+
+            if new_state == 'BALL_POST_HIT_SIDE_SHIFT':
+                self.post_hit_side_shift_start_pose = None
+                self.side_shift_done = False
+
+    # ============================================================
+    # 判定
+    # ============================================================
     def yellow_reached(self, yellow_result: dict, ratio: float) -> bool:
         if yellow_result['img_shape'] is None or not yellow_result['has_line']:
             self.yellow_stop_counter = 0
@@ -697,6 +920,57 @@ class MultiStageOrangeYellowTaskNode(Node):
             throttle_duration_sec=0.5
         )
         return self.yellow_stop_counter >= self.yellow_stop_confirm_count
+
+    def stage1_yellow_passed(self, yellow_result: dict) -> bool:
+        if yellow_result['img_shape'] is None:
+            self.stage1_yellow_disappear_counter = 0
+            return False
+
+        h, _ = yellow_result['img_shape']
+        bottom_threshold = int(h * self.yellow_stop_line_y_ratio_stage1)
+
+        # 还看得到黄线
+        if yellow_result['has_line'] and yellow_result['line_bottom_y'] is not None:
+            current_bottom = yellow_result['line_bottom_y']
+
+            # 先记录：黄线已经到过图像最底下
+            if current_bottom >= bottom_threshold:
+                if not self.stage1_yellow_touched_bottom:
+                    self.get_logger().info(
+                        f'STAGE1 yellow touched bottom: bottom={current_bottom}, '
+                        f'threshold={bottom_threshold}'
+                    )
+                self.stage1_yellow_touched_bottom = True
+                self.stage1_yellow_disappear_counter = 0
+                return False
+
+            # 如果之前已经到底过，现在又重新低于阈值
+            # 就认为近处这条黄线已经过去了
+            if self.stage1_yellow_touched_bottom and current_bottom < bottom_threshold:
+                self.stage1_yellow_disappear_counter += 1
+                self.get_logger().info(
+                    f'STAGE1 yellow dropped below threshold after touching bottom: '
+                    f'bottom={current_bottom}, threshold={bottom_threshold}, '
+                    f'counter={self.stage1_yellow_disappear_counter}/{self.yellow_stop_confirm_count}',
+                    throttle_duration_sec=0.2
+                )
+                return self.stage1_yellow_disappear_counter >= self.yellow_stop_confirm_count
+
+            self.stage1_yellow_disappear_counter = 0
+            return False
+
+        # 如果已经到底过，并且现在彻底看不到黄线，也算通过
+        if self.stage1_yellow_touched_bottom:
+            self.stage1_yellow_disappear_counter += 1
+            self.get_logger().info(
+                f'STAGE1 yellow disappeared after touching bottom: '
+                f'counter={self.stage1_yellow_disappear_counter}/{self.yellow_stop_confirm_count}',
+                throttle_duration_sec=0.2
+            )
+            return self.stage1_yellow_disappear_counter >= self.yellow_stop_confirm_count
+
+        self.stage1_yellow_disappear_counter = 0
+        return False
 
     def handle_rotation_state(self, current_yaw: float, angle_rad: float, tolerance_rad: float,
                               confirm_count: int, wz_mag: float, next_state: str) -> bool:
@@ -729,206 +1003,166 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.send_velocity_command(0.0, 0.0, wz)
         return True
 
+    # ============================================================
+    # 巡航中线
+    # ============================================================
+    def send_center_cruise_command(self, ball: Dict):
+        if ball['has_center_reference'] and ball['center_error_px'] is not None:
+            err_norm = ball['center_error_px'] / max(self.rgb_w * 0.5, 1.0)
+            vy = clamp(
+                -self.center_cruise_vy_gain * err_norm,
+                -self.center_cruise_vy_max,
+                self.center_cruise_vy_max
+            )
+            self.send_velocity_command(self.cruise_forward_speed, vy, 0.0)
+        else:
+            self.send_velocity_command(self.cruise_forward_speed, 0.0, 0.0)
+
+    # ============================================================
+    # 球子链
+    # ============================================================
+    def finish_ball_task_and_return(self, x: float, y: float, yaw: float):
+        self.last_ball_done_time_sec = self.now_sec()
+        self.last_ball_done_pose = (x, y, yaw)
+        self.orange_hit_count += 1
+        self.get_logger().info(
+            f'Ball task finished. orange_hit_count={self.orange_hit_count} | '
+            f'last_ball_done_time_sec={self.last_ball_done_time_sec:.2f} | '
+            f'last_ball_done_pose=({x:.3f}, {y:.3f}, {yaw:.3f})'
+        )
+        self.set_state(self.ball_return_state)
+
     def handle_ball_subchain(self, x: float, y: float, yaw: float) -> bool:
         ball = self.latest_ball_result
+        target = ball['best_target_ball']
 
-        if self.state == 'BALL_ALIGN':
-            if not ball['has_ball'] or ball['ball_depth_m'] is None:
-                self.align_counter = 0
+        # 1) 中线 -> 对齐球：只这里加最小 vy
+        if self.state == 'BALL_LATERAL_ALIGN':
+            if target is None:
                 self.send_stop_command()
+                self.set_state('BALL_POST_HIT_SIDE_SHIFT')
                 return True
 
-            if ball['aligned']:
-                self.align_counter += 1
+            error_px = target['error_x']
+            err_norm = error_px / max(self.rgb_w * 0.5, 1.0)
+
+            vx = self.lateral_align_forward_speed
+            vy = clamp(
+                -self.lateral_align_vy_gain * err_norm,
+                -self.lateral_align_vy_max,
+                self.lateral_align_vy_max
+            )
+            vy = self.apply_min_abs_velocity(vy, self.lateral_align_vy_min, deadband=0.01)
+
+            if abs(error_px) <= self.lateral_align_px_tol:
+                self.lateral_align_counter += 1
                 self.get_logger().info(
-                    f"Ball horizontally aligned. align_counter={self.align_counter}/{self.align_confirm_count}",
+                    f'BALL_LATERAL_ALIGN ok: error_x={error_px}, '
+                    f'counter={self.lateral_align_counter}/{self.lateral_align_confirm_count}',
                     throttle_duration_sec=0.2
                 )
-
-                if self.align_counter >= self.align_confirm_count:
-                    if self.pre_turn_pose is not None:
-                        _, _, yaw_detect = self.pre_turn_pose
-                        yaw_aligned = yaw
-                        self.align_yaw_delta = wrap_to_pi(yaw_aligned - yaw_detect)
-                    else:
-                        self.align_yaw_delta = None
-
-                    self.align_pose = (x, y, yaw)
-                    self.pose_at_0p2 = None
-                    self.align_to_0p2_distance_m = 0.0
-                    self.depth_return_counter = 0
-                    self.segment_start_pose = None
-
-                    self.get_logger().info(
-                        f"Saved align_pose = ({x:.3f}, {y:.3f}, {yaw:.3f})"
-                    )
-
-                    self.set_state('BALL_WAIT_COLLISION_TRIGGER')
-                    self.send_stop_command()
+                if self.lateral_align_counter >= self.lateral_align_confirm_count:
+                    self.set_state('BALL_HIT_CONFIRM_FORWARD')
                     return True
-
-                self.send_stop_command()
-                return True
-
-            self.align_counter = 0
-            wz = -self.align_turn_wz if ball['error_x'] > 0 else self.align_turn_wz
-            self.send_velocity_command(0.0, 0.0, wz)
-            return True
-
-        if self.state == 'BALL_WAIT_COLLISION_TRIGGER':
-            if not ball['has_ball'] or ball['ball_depth_m'] is None:
-                self.send_stop_command()
-                return True
-
-            if ball['ball_depth_m'] > self.collision_trigger_distance_m:
-                self.send_velocity_command(self.pre_collision_forward_speed, 0.0, 0.0)
-                return True
-
-            self.collision_start_pose = (x, y, yaw)
-            self.pose_at_0p2 = (x, y, yaw)
-
-            if self.align_pose is not None:
-                ax, ay, _ = self.align_pose
-                self.align_to_0p2_distance_m = math.hypot(x - ax, y - ay)
             else:
-                self.align_to_0p2_distance_m = 0.0
+                self.lateral_align_counter = 0
 
             self.get_logger().info(
-                f"Saved pose_at_0p2 = ({x:.3f}, {y:.3f}, {yaw:.3f}) | "
-                f"align_to_0p2_distance_m = {self.align_to_0p2_distance_m:.3f}"
-            )
-
-            self.set_state('BALL_COLLISION_FORWARD')
-            return True
-
-        if self.state == 'BALL_COLLISION_FORWARD':
-            if self.collision_start_pose is None:
-                self.send_stop_command()
-                self.set_state(self.ball_return_state)
-                return True
-
-            x0, y0, _ = self.collision_start_pose
-            dist = math.hypot(x - x0, y - y0)
-
-            if dist >= self.collision_forward_distance_m:
-                self.depth_return_counter = 0
-                self.set_state('BALL_RETURN_TO_0P2_BY_DEPTH')
-                return True
-
-            self.send_velocity_command(self.collision_forward_speed, 0.0, 0.0)
-            return True
-
-        if self.state == 'BALL_RETURN_TO_0P2_BY_DEPTH':
-            if not ball['has_ball'] or ball['ball_depth_m'] is None:
-                self.send_stop_command()
-                return True
-
-            depth_err = ball['ball_depth_m'] - self.collision_trigger_distance_m
-
-            self.get_logger().info(
-                f"[BALL_RETURN_TO_0P2_BY_DEPTH] depth={ball['ball_depth_m']:.3f}, "
-                f"target={self.collision_trigger_distance_m:.3f}, err={depth_err:.3f}",
+                f'BALL_LATERAL_ALIGN target=({target["color"]}, side={target["side"]}) '
+                f'depth={target["depth_m"]:.3f} error_x={error_px} '
+                f'radius={target["radius"]:.1f} '
+                f'(circle={target.get("radius_circle", -1):.1f}, eq={target.get("radius_eq", -1):.1f}) '
+                f'-> cmd vx={vx:.3f}, vy={vy:.3f}',
                 throttle_duration_sec=0.3
             )
-
-            if abs(depth_err) <= self.return_depth_tolerance_m:
-                self.depth_return_counter += 1
-                self.send_stop_command()
-
-                if self.depth_return_counter >= self.return_depth_confirm_count:
-                    self.segment_start_pose = (x, y, yaw)
-                    self.get_logger().info(
-                        f"Depth returned to 0.2m. segment_start_pose=({x:.3f}, {y:.3f}, {yaw:.3f})"
-                    )
-                    self.set_state('BALL_BACKWARD_ALIGN_TO_0P2_DISTANCE')
-                return True
-
-            self.depth_return_counter = 0
-            self.send_velocity_command(-self.backward_speed, 0.0, 0.0)
+            self.send_velocity_command(vx, vy, 0.0)
             return True
 
-        if self.state == 'BALL_BACKWARD_ALIGN_TO_0P2_DISTANCE':
-            if self.segment_start_pose is None:
-                self.send_stop_command()
-                self.set_state('BALL_RESTORE_PRETURN_YAW')
-                return True
+        # 2) 直接撞击：TF 位移结束
+        if self.state == 'BALL_HIT_CONFIRM_FORWARD':
+            if self.hit_start_pose is None:
+                self.hit_start_pose = (x, y, yaw)
 
-            x0, y0, _ = self.segment_start_pose
-            dist = math.hypot(x - x0, y - y0)
+                if target is not None and target['depth_m'] is not None:
+                    self.hit_start_depth_m = target['depth_m']
+                    self.last_hit_side = target['side']
+                else:
+                    self.hit_start_depth_m = 0.20
+                    self.last_hit_side = None
 
-            self.get_logger().info(
-                f"[BALL_BACKWARD_ALIGN_TO_0P2_DISTANCE] dist={dist:.3f}/{self.align_to_0p2_distance_m:.3f}",
-                throttle_duration_sec=0.3
-            )
+                self.hit_start_depth_m = clamp(self.hit_start_depth_m, 0.10, 0.80)
 
-            if dist >= self.align_to_0p2_distance_m:
-                self.send_stop_command()
-                self.restore_start_yaw = yaw
-                self.get_logger().info(
-                    f"Saved restore_start_yaw = {self.restore_start_yaw:.3f} "
-                    f"({math.degrees(self.restore_start_yaw):.2f} deg)"
+            raw_hit_forward_target_distance_m = self.hit_start_depth_m + self.hit_extra_distance_m
+
+            if raw_hit_forward_target_distance_m > 0.3:
+                self.get_logger().warn(
+                    f'BALL_HIT_CONFIRM_FORWARD abnormal target distance: '
+                    f'depth={self.hit_start_depth_m:.3f}, '
+                    f'raw_target={raw_hit_forward_target_distance_m:.3f} > 0.400, '
+                    f'override to 0.13'
                 )
-                self.set_state('BALL_RESTORE_PRETURN_YAW')
-                return True
-
-            self.send_velocity_command(-self.backward_speed, 0.0, 0.0)
-            return True
-
-        if self.state == 'BALL_RESTORE_PRETURN_YAW':
-            if self.restore_start_yaw is None:
-                self.send_stop_command()
-                self.set_state(self.ball_return_state)
-                return True
-
-            if self.align_yaw_delta is not None:
-                yaw_target = wrap_to_pi(self.restore_start_yaw - self.align_yaw_delta)
+                self.hit_forward_target_distance_m = 0.13
             else:
-                yaw_target = self.restore_start_yaw
+                self.hit_forward_target_distance_m = raw_hit_forward_target_distance_m
 
-            yaw_err = wrap_to_pi(yaw_target - yaw)
-            delta_show = self.align_yaw_delta if self.align_yaw_delta is not None else float('nan')
-
-            self.get_logger().info(
-                f"Restore using reversed yaw delta: "
-                f"restore_start_yaw={self.restore_start_yaw:.3f}, "
-                f"align_yaw_delta={delta_show:.3f}, "
-                f"yaw_target={yaw_target:.3f}, "
-                f"current_yaw={yaw:.3f}, yaw_err={yaw_err:.3f}",
-                throttle_duration_sec=0.5
-            )
-
-            if abs(yaw_err) <= self.return_yaw_tolerance_rad:
-                self.restore_counter += 1
                 self.get_logger().info(
-                    f"Yaw restored in this frame. restore_counter={self.restore_counter}/{self.restore_confirm_count}",
-                    throttle_duration_sec=0.2
+                    f'BALL_HIT_CONFIRM_FORWARD start: '
+                    f'hit_start_depth_m={self.hit_start_depth_m:.3f}, '
+                    f'hit_forward_target_distance_m={self.hit_forward_target_distance_m:.3f}, '
+                    f'last_hit_side={self.last_hit_side}'
                 )
 
-                if self.restore_counter >= self.restore_confirm_count:
-                    self.send_stop_command()
-                    self.last_ball_done_time_sec = self.now_sec()
-                    self.last_ball_done_pose = (x, y, yaw)
-                    self.orange_hit_count += 1
+            current_pose = (x, y, yaw)
+            dist = self.planar_distance(self.hit_start_pose, current_pose)
 
-                    self.get_logger().info(
-                        f'Ball task finished. orange_hit_count={self.orange_hit_count} | '
-                        f'last_ball_done_time_sec={self.last_ball_done_time_sec:.2f} | '
-                        f'last_ball_done_pose=({x:.3f}, {y:.3f}, {yaw:.3f})'
-                    )
+            self.get_logger().info(
+                f'BALL_HIT_CONFIRM_FORWARD dist={dist:.3f}/{self.hit_forward_target_distance_m:.3f}',
+                throttle_duration_sec=0.2
+            )
 
-                    self.set_state(self.ball_return_state)
-                    return True
-
-                self.send_stop_command()
+            if dist >= self.hit_forward_target_distance_m:
+                self.set_state('BALL_POST_HIT_SIDE_SHIFT')
                 return True
 
-            self.restore_counter = 0
-            wz = self.restore_turn_wz if yaw_err > 0 else -self.restore_turn_wz
-            self.send_velocity_command(0.0, 0.0, wz)
+            self.send_velocity_command(self.hit_forward_speed, 0.0, 0.0)
+            return True
+
+        # 3) 撞后左右移动：完成后直接回巡航
+        if self.state == 'BALL_POST_HIT_SIDE_SHIFT':
+            if self.post_hit_side_shift_start_pose is None:
+                self.post_hit_side_shift_start_pose = (x, y, yaw)
+                self.get_logger().info(
+                    f'BALL_POST_HIT_SIDE_SHIFT start, last_hit_side={self.last_hit_side}'
+                )
+
+            current_pose = (x, y, yaw)
+            side_shift_dist = self.planar_distance(self.post_hit_side_shift_start_pose, current_pose)
+
+            self.get_logger().info(
+                f'BALL_POST_HIT_SIDE_SHIFT dist={side_shift_dist:.3f}/{self.post_hit_side_shift_distance_m:.3f}',
+                throttle_duration_sec=0.2
+            )
+
+            if side_shift_dist >= self.post_hit_side_shift_distance_m:
+                self.finish_ball_task_and_return(x, y, yaw)
+                return True
+
+            if self.last_hit_side == 'left':
+                self.send_velocity_command(0.0, -abs(self.post_hit_side_shift_speed), 0.0)
+                return True
+
+            if self.last_hit_side == 'right':
+                self.send_velocity_command(0.0, abs(self.post_hit_side_shift_speed), 0.0)
+                return True
+
+            self.finish_ball_task_and_return(x, y, yaw)
             return True
 
         return False
 
+    # ============================================================
+    # 主循环
+    # ============================================================
     def control_loop(self):
         pose = self.get_current_pose()
 
@@ -944,11 +1178,14 @@ class MultiStageOrangeYellowTaskNode(Node):
         if ball['img_shape'] is not None:
             self.get_logger().info(
                 f"state={self.state} | orange_hit_count={self.orange_hit_count} | "
-                f"ball_center={ball['ball_center']} | ball_depth={ball['ball_depth_m']} | "
-                f"ball_radius={ball['ball_radius']} | ball_error_x={ball['error_x']} | "
-                f"ball_aligned={ball['aligned']} | yellow_has_line={yellow['has_line']} | "
-                f"yellow_bottom={yellow['line_bottom_y']} | align_counter={self.align_counter} | "
-                f"restore_counter={self.restore_counter} | yellow_stop_counter={self.yellow_stop_counter}",
+                f"has_ball={ball['has_ball']} | ball_center={ball['ball_center']} | "
+                f"ball_depth={ball['ball_depth_m']} | ball_radius={ball['ball_radius']} | "
+                f"ball_error_x={ball['error_x']} | has_center_ref={ball['has_center_reference']} | "
+                f"center_error_px={ball['center_error_px']} | "
+                f"left_ref={'Y' if ball['left_ref'] is not None else 'N'} | "
+                f"right_ref={'Y' if ball['right_ref'] is not None else 'N'} | "
+                f"orange_cnt={len(ball['orange_balls'])} | blue_cnt={len(ball['blue_balls'])} | "
+                f"yellow_has_line={yellow['has_line']} | yellow_bottom={yellow['line_bottom_y']}",
                 throttle_duration_sec=0.6
             )
 
@@ -958,7 +1195,7 @@ class MultiStageOrangeYellowTaskNode(Node):
         if self.state == 'STAGE1_ROTATE_LEFT_90':
             self.execute_left_jump_turn(
                 jump_count=1,
-                next_state='STAGE1_MOVE_RIGHT_FIXED_DISTANCE'
+                next_state='STAGE2_CRUISE_YELLOW_ONLY'
             )
             return
 
@@ -977,43 +1214,42 @@ class MultiStageOrangeYellowTaskNode(Node):
             return
 
         if self.state == 'STAGE3_ROTATE_LEFT_30':
-            if self.handle_rotation_state(yaw, math.pi / 6.0, self.rotate_left_30_tolerance_rad,
-                                          self.rotate_left_30_confirm_count, self.rotate_left_30_wz,
-                                          'DONE'):
+            if self.handle_rotation_state(
+                yaw,
+                math.pi / 6.0,
+                self.rotate_left_30_tolerance_rad,
+                self.rotate_left_30_confirm_count,
+                self.rotate_left_30_wz,
+                'DONE'
+            ):
                 return
 
         if self.state == 'STAGE1_CRUISE_BALL_AND_YELLOW':
-            self.align_counter = 0
-            self.restore_counter = 0
-
-            if self.yellow_reached(yellow, self.yellow_stop_line_y_ratio_stage1):
-                self.send_stop_command()
+            if self.stage1_yellow_passed(yellow):
                 self.set_state('STAGE1_ROTATE_LEFT_90')
                 return
 
-            if ball['has_ball'] and ball['ball_depth_m'] is not None and ball['ball_radius'] is not None:
-                if ball['ball_depth_m'] <= self.turn_trigger_distance_m and ball['ball_radius'] >= self.min_ball_radius_to_trigger:
+            target = ball['best_target_ball']
+            if target is not None:
+                if (target['depth_m'] <= self.turn_trigger_distance_m and
+                        target['radius'] >= self.min_ball_radius_to_trigger):
                     if self.can_trigger_ball_again((x, y, yaw)):
                         self.pre_turn_pose = (x, y, yaw)
-                        self.align_yaw_delta = None
-                        self.restore_start_yaw = None
-                        self.align_pose = None
-                        self.pose_at_0p2 = None
-                        self.align_to_0p2_distance_m = 0.0
-                        self.depth_return_counter = 0
-                        self.segment_start_pose = None
                         self.ball_return_state = 'STAGE1_CRUISE_BALL_AND_YELLOW'
-                        self.get_logger().info(f"Saved pre_turn_pose = ({x:.3f}, {y:.3f}, {yaw:.3f})")
-                        self.set_state('BALL_ALIGN')
-                        self.send_stop_command()
+                        self.get_logger().info(
+                            f"Saved pre_turn_pose = ({x:.3f}, {y:.3f}, {yaw:.3f}) | "
+                            f"target=({target['color']}, side={target['side']}, depth={target['depth_m']:.3f}, "
+                            f"error_x={target['error_x']})"
+                        )
+                        self.set_state('BALL_LATERAL_ALIGN')
                         return
 
-            self.send_velocity_command(self.cruise_forward_speed, 0.0, 0.0)
+            self.send_center_cruise_command(ball)
             return
 
         if self.state == 'STAGE1_MOVE_RIGHT_FIXED_DISTANCE':
-            time.sleep(1)
             if self.stage1_right_shift_start_pose is None:
+                time.sleep(2)
                 self.stage1_right_shift_start_pose = (x, y, yaw)
                 self.get_logger().info(
                     f"Saved stage1_right_shift_start_pose = ({x:.3f}, {y:.3f}, {yaw:.3f})"
@@ -1028,19 +1264,38 @@ class MultiStageOrangeYellowTaskNode(Node):
             )
 
             if dist >= self.stage1_right_shift_distance_m - self.stage1_right_shift_tolerance_m:
-                self.send_stop_command()
                 self.set_state('STAGE2_CRUISE_YELLOW_ONLY')
                 return
 
             self.send_move_right_command(self.right_speed)
             return
 
-        if self.state == 'STAGE2_CRUISE_YELLOW_ONLY':
-            self.align_counter = 0
-            self.restore_counter = 0
+        if self.state == 'STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP':
+            if self.stage2_forward_after_left_jump_start_pose is None:
+                time.sleep(2)
+                self.stage2_forward_after_left_jump_start_pose = (x, y, yaw)
+                self.get_logger().info(
+                    f"Saved stage2_forward_after_left_jump_start_pose = ({x:.3f}, {y:.3f}, {yaw:.3f})"
+                )
 
+            x0, y0, _ = self.stage2_forward_after_left_jump_start_pose
+            dist = math.hypot(x - x0, y - y0)
+
+            self.get_logger().info(
+                f"Stage2 forward after left jump: dist={dist:.3f} / "
+                f"{self.stage2_forward_after_left_jump_distance_m:.3f}",
+                throttle_duration_sec=0.5
+            )
+
+            if dist >= self.stage2_forward_after_left_jump_distance_m - self.stage2_forward_after_left_jump_tolerance_m:
+                self.set_state('STAGE3_CRUISE_BALL_ONLY')
+                return
+
+            self.send_velocity_command(self.stage2_forward_after_left_jump_speed, 0.0, 0.0)
+            return
+
+        if self.state == 'STAGE2_CRUISE_YELLOW_ONLY':
             if self.yellow_reached(yellow, self.yellow_stop_line_y_ratio_stage2):
-                self.send_stop_command()
                 self.set_state('STAGE2_ROTATE_LEFT_90')
                 return
 
@@ -1048,32 +1303,26 @@ class MultiStageOrangeYellowTaskNode(Node):
             return
 
         if self.state == 'STAGE3_CRUISE_BALL_ONLY':
-            self.align_counter = 0
-            self.restore_counter = 0
-
             if self.yellow_reached(yellow, self.yellow_stop_line_y_ratio_stage3):
-                self.send_stop_command()
                 self.set_state('STAGE3_ROTATE_BACK_180')
                 return
 
-            if ball['has_ball'] and ball['ball_depth_m'] is not None and ball['ball_radius'] is not None:
-                if ball['ball_depth_m'] <= self.turn_trigger_distance_m and ball['ball_radius'] >= self.min_ball_radius_to_trigger:
+            target = ball['best_target_ball']
+            if target is not None:
+                if (target['depth_m'] <= self.turn_trigger_distance_m and
+                        target['radius'] >= self.min_ball_radius_to_trigger):
                     if self.can_trigger_ball_again((x, y, yaw)):
                         self.pre_turn_pose = (x, y, yaw)
-                        self.align_yaw_delta = None
-                        self.restore_start_yaw = None
-                        self.align_pose = None
-                        self.pose_at_0p2 = None
-                        self.align_to_0p2_distance_m = 0.0
-                        self.depth_return_counter = 0
-                        self.segment_start_pose = None
                         self.ball_return_state = 'STAGE3_CRUISE_BALL_ONLY'
-                        self.get_logger().info(f"Saved pre_turn_pose = ({x:.3f}, {y:.3f}, {yaw:.3f})")
-                        self.set_state('BALL_ALIGN')
-                        self.send_stop_command()
+                        self.get_logger().info(
+                            f"Saved pre_turn_pose = ({x:.3f}, {y:.3f}, {yaw:.3f}) | "
+                            f"target=({target['color']}, side={target['side']}, depth={target['depth_m']:.3f}, "
+                            f"error_x={target['error_x']})"
+                        )
+                        self.set_state('BALL_LATERAL_ALIGN')
                         return
 
-            self.send_velocity_command(self.cruise_forward_speed, 0.0, 0.0)
+            self.send_center_cruise_command(ball)
             return
 
         if self.state == 'STAGE3_FINAL_DECISION':
@@ -1087,41 +1336,34 @@ class MultiStageOrangeYellowTaskNode(Node):
 
         if self.state == 'STAGE3_GO_SCAN':
             if self.yellow_reached(yellow, self.yellow_ratio_scan):
-                self.send_stop_command()
                 self.set_state('STAGE3_SCAN_AND_HIT_LAST')
                 return
 
-            self.send_velocity_command(self.cruise_forward_speed, 0.0, 0.0)
+            self.send_center_cruise_command(ball)
             return
 
         if self.state == 'STAGE3_SCAN_AND_HIT_LAST':
-            if ball['has_ball'] and ball['ball_depth_m'] is not None and ball['ball_radius'] is not None:
+            target = ball['best_target_ball']
+            if target is not None:
                 self.pre_turn_pose = (x, y, yaw)
-                self.align_yaw_delta = None
-                self.restore_start_yaw = None
-                self.align_pose = None
-                self.pose_at_0p2 = None
-                self.align_to_0p2_distance_m = 0.0
-                self.depth_return_counter = 0
-                self.segment_start_pose = None
                 self.ball_return_state = 'STAGE3_GO_FINAL'
                 self.get_logger().info(
-                    f"Scan area found final ball. pre_turn_pose=({x:.3f}, {y:.3f}, {yaw:.3f})"
+                    f"Scan area found final ball. pre_turn_pose=({x:.3f}, {y:.3f}, {yaw:.3f}) | "
+                    f"target=({target['color']}, side={target['side']}, depth={target['depth_m']:.3f}, "
+                    f"error_x={target['error_x']})"
                 )
-                self.set_state('BALL_ALIGN')
-                self.send_stop_command()
+                self.set_state('BALL_LATERAL_ALIGN')
                 return
 
-            self.send_velocity_command(0.05, 0.0, 0.0)
+            self.send_center_cruise_command(ball)
             return
 
         if self.state == 'STAGE3_GO_FINAL':
             if self.yellow_reached(yellow, self.yellow_ratio_final):
-                self.send_stop_command()
                 self.set_state('STAGE3_ROTATE_LEFT_30')
                 return
 
-            self.send_velocity_command(self.cruise_forward_speed, 0.0, 0.0)
+            self.send_center_cruise_command(ball)
             return
 
         if self.state == 'DONE':
