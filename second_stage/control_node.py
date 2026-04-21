@@ -52,7 +52,7 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('global_frame', 'vodom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('control_hz', 30.0)
-        self.declare_parameter('initial_state', 'STAGE3_GO_FINAL')
+        self.declare_parameter('initial_state', 'STAGE1_CRUISE_BALL_AND_YELLOW')
         # =========================
         # 状态机状态说明
         # =========================
@@ -191,19 +191,37 @@ class MultiStageOrangeYellowTaskNode(Node):
         # =========================
         # 巡航 / 中线
         # =========================
-        self.declare_parameter('cruise_forward_speed', 0.2)
-        self.declare_parameter('turn_trigger_distance_m', 0.4)
+        self.declare_parameter('stage1_cruise_forward_speed', 0.30)
+        self.declare_parameter('stage2_cruise_forward_speed', 0.40)
+        self.declare_parameter('stage3_cruise_ball_only_speed', 0.30)
+        self.declare_parameter('stage3_go_scan_speed', 0.40)
+        self.declare_parameter('stage3_go_final_speed', 0.40)
 
-        self.declare_parameter('center_cruise_vy_gain', 0.15)
-        self.declare_parameter('center_cruise_vy_max', 0.10)
+        # 黄线预触发减速区：先减速，再真正触发切状态
+        self.declare_parameter('yellow_slowdown_ratio_stage1', 0.90)
+        self.declare_parameter('yellow_slowdown_ratio_stage2', 0.68)
+        self.declare_parameter('yellow_slowdown_ratio_stage3', 0.70)
+        self.declare_parameter('yellow_slowdown_ratio_scan', 0.52)
+        self.declare_parameter('yellow_slowdown_ratio_final', 0.80)
+
+        self.declare_parameter('stage1_yellow_slow_speed', 0.15)
+        self.declare_parameter('stage2_yellow_slow_speed', 0.15)
+        self.declare_parameter('stage3_yellow_slow_speed', 0.15)
+        self.declare_parameter('stage3_go_scan_yellow_slow_speed', 0.15)
+        self.declare_parameter('stage3_go_final_yellow_slow_speed', 0.15)
+
+        self.declare_parameter('turn_trigger_distance_m', 0.45)
+
+        self.declare_parameter('center_cruise_vy_gain', 0.25)
+        self.declare_parameter('center_cruise_vy_max', 0.3)
         self.declare_parameter('center_ok_px', 18.0)
 
         # =========================
         # 对齐球阶段：小 vx + 主 vy
         # =========================
-        self.declare_parameter('lateral_align_forward_speed', 0.06)
-        self.declare_parameter('lateral_align_vy_gain', 0.18)
-        self.declare_parameter('lateral_align_vy_max', 0.15)
+        self.declare_parameter('lateral_align_forward_speed', 0.115)
+        self.declare_parameter('lateral_align_vy_gain', 0.30)
+        self.declare_parameter('lateral_align_vy_max', 0.30)
         self.declare_parameter('lateral_align_vy_min', 0.10)
         self.declare_parameter('lateral_align_px_tol', 20.0)
         self.declare_parameter('lateral_align_confirm_count', 1)
@@ -217,9 +235,11 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('backoff_speed', 0.10)
         self.declare_parameter('backoff_distance_m', 0.10)
 
-        # 撞完后先按左右无条件偏一段
+        # 撞完后先按左右无条件偏一段（前半段快，后半段慢）
         self.declare_parameter('post_hit_side_shift_distance_m', 0.30)
-        self.declare_parameter('post_hit_side_shift_speed', 0.15)
+        self.declare_parameter('post_hit_side_shift_speed_fast', 0.15)
+        self.declare_parameter('post_hit_side_shift_speed_slow', 0.15)
+        self.declare_parameter('post_hit_side_shift_slowdown_ratio', 0.20)
 
         # =========================
         # 防重复撞同一颗球
@@ -240,13 +260,13 @@ class MultiStageOrangeYellowTaskNode(Node):
 
         self.declare_parameter('rotate_left_30_tolerance_rad', 0.02)
         self.declare_parameter('rotate_left_30_confirm_count', 3)
-        self.declare_parameter('rotate_left_30_wz', 0.15)
+        self.declare_parameter('rotate_left_30_wz', 0.30)
 
         # =========================
         # 第二段左跳后按仿真时间前进
         # =========================
-        self.declare_parameter('stage2_forward_after_left_jump_speed', 0.15)
-        self.declare_parameter('stage2_forward_after_left_jump_duration_sec', 1.0)
+        self.declare_parameter('stage2_forward_after_left_jump_speed', 0.3)
+        self.declare_parameter('stage2_forward_after_left_jump_duration_sec', 2.0)
 
         # =========================
         # 读取参数
@@ -306,7 +326,24 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.yellow_ratio_scan = float(self.get_parameter('yellow_ratio_scan').value)
         self.yellow_ratio_final = float(self.get_parameter('yellow_ratio_final').value)
 
-        self.cruise_forward_speed = float(self.get_parameter('cruise_forward_speed').value)
+        self.stage1_cruise_forward_speed = float(self.get_parameter('stage1_cruise_forward_speed').value)
+        self.stage2_cruise_forward_speed = float(self.get_parameter('stage2_cruise_forward_speed').value)
+        self.stage3_cruise_ball_only_speed = float(self.get_parameter('stage3_cruise_ball_only_speed').value)
+        self.stage3_go_scan_speed = float(self.get_parameter('stage3_go_scan_speed').value)
+        self.stage3_go_final_speed = float(self.get_parameter('stage3_go_final_speed').value)
+
+        self.yellow_slowdown_ratio_stage1 = float(self.get_parameter('yellow_slowdown_ratio_stage1').value)
+        self.yellow_slowdown_ratio_stage2 = float(self.get_parameter('yellow_slowdown_ratio_stage2').value)
+        self.yellow_slowdown_ratio_stage3 = float(self.get_parameter('yellow_slowdown_ratio_stage3').value)
+        self.yellow_slowdown_ratio_scan = float(self.get_parameter('yellow_slowdown_ratio_scan').value)
+        self.yellow_slowdown_ratio_final = float(self.get_parameter('yellow_slowdown_ratio_final').value)
+
+        self.stage1_yellow_slow_speed = float(self.get_parameter('stage1_yellow_slow_speed').value)
+        self.stage2_yellow_slow_speed = float(self.get_parameter('stage2_yellow_slow_speed').value)
+        self.stage3_yellow_slow_speed = float(self.get_parameter('stage3_yellow_slow_speed').value)
+        self.stage3_go_scan_yellow_slow_speed = float(self.get_parameter('stage3_go_scan_yellow_slow_speed').value)
+        self.stage3_go_final_yellow_slow_speed = float(self.get_parameter('stage3_go_final_yellow_slow_speed').value)
+
         self.turn_trigger_distance_m = float(self.get_parameter('turn_trigger_distance_m').value)
 
         self.center_cruise_vy_gain = float(self.get_parameter('center_cruise_vy_gain').value)
@@ -327,7 +364,9 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.backoff_distance_m = float(self.get_parameter('backoff_distance_m').value)
 
         self.post_hit_side_shift_distance_m = float(self.get_parameter('post_hit_side_shift_distance_m').value)
-        self.post_hit_side_shift_speed = float(self.get_parameter('post_hit_side_shift_speed').value)
+        self.post_hit_side_shift_speed_fast = float(self.get_parameter('post_hit_side_shift_speed_fast').value)
+        self.post_hit_side_shift_speed_slow = float(self.get_parameter('post_hit_side_shift_speed_slow').value)
+        self.post_hit_side_shift_slowdown_ratio = float(self.get_parameter('post_hit_side_shift_slowdown_ratio').value)
 
 
         self.ball_retrigger_cooldown_sec = float(self.get_parameter('ball_retrigger_cooldown_sec').value)
@@ -847,6 +886,8 @@ class MultiStageOrangeYellowTaskNode(Node):
         require_front_horizontal = self.state not in (
             'STAGE1_CRUISE_BALL_AND_YELLOW',
             'STAGE3_CRUISE_BALL_ONLY',
+            'STAGE3_GO_SCAN',
+            'STAGE3_GO_FINAL',
         )
 
         for cnt in contours:
@@ -1037,7 +1078,7 @@ class MultiStageOrangeYellowTaskNode(Node):
     # ============================================================
     # 巡航中线
     # ============================================================
-    def send_center_cruise_command(self, ball: Dict):
+    def send_center_cruise_command(self, ball: Dict, vx: float):
         if ball['has_center_reference'] and ball['center_error_px'] is not None:
             err_norm = ball['center_error_px'] / max(self.rgb_w * 0.5, 1.0)
             vy = clamp(
@@ -1045,9 +1086,27 @@ class MultiStageOrangeYellowTaskNode(Node):
                 -self.center_cruise_vy_max,
                 self.center_cruise_vy_max
             )
-            self.send_velocity_command(self.cruise_forward_speed, vy, 0.0)
+            self.send_velocity_command(vx, vy, 0.0)
         else:
-            self.send_velocity_command(self.cruise_forward_speed, 0.0, 0.0)
+            self.send_velocity_command(vx, 0.0, 0.0)
+
+    def get_yellow_slowdown_speed(
+        self,
+        yellow_result: dict,
+        normal_speed: float,
+        slow_speed: float,
+        slowdown_ratio: float
+    ) -> float:
+        if yellow_result['img_shape'] is None or not yellow_result['has_line']:
+            return normal_speed
+
+        h, _ = yellow_result['img_shape']
+        slow_threshold = int(h * slowdown_ratio)
+        bottom = yellow_result['line_bottom_y']
+
+        if bottom is not None and bottom >= slow_threshold:
+            return min(normal_speed, slow_speed)
+        return normal_speed
 
     # ============================================================
     # 球子链
@@ -1178,12 +1237,28 @@ class MultiStageOrangeYellowTaskNode(Node):
                 self.finish_ball_task_and_return(x, y, yaw)
                 return True
 
+            progress_ratio = 0.0
+            if self.post_hit_side_shift_distance_m > 1e-6:
+                progress_ratio = side_shift_dist / self.post_hit_side_shift_distance_m
+
+            if progress_ratio >= self.post_hit_side_shift_slowdown_ratio:
+                side_shift_speed = self.post_hit_side_shift_speed_slow
+            else:
+                side_shift_speed = self.post_hit_side_shift_speed_fast
+
+            self.get_logger().info(
+                f'BALL_POST_HIT_SIDE_SHIFT speed={side_shift_speed:.3f} | '
+                f'progress={progress_ratio:.2f} | '
+                f'slowdown_ratio={self.post_hit_side_shift_slowdown_ratio:.2f}',
+                throttle_duration_sec=0.3
+            )
+
             if self.last_hit_side == 'left':
-                self.send_velocity_command(0.0, -abs(self.post_hit_side_shift_speed), 0.0)
+                self.send_velocity_command(0.0, -abs(side_shift_speed), 0.0)
                 return True
 
             if self.last_hit_side == 'right':
-                self.send_velocity_command(0.0, abs(self.post_hit_side_shift_speed), 0.0)
+                self.send_velocity_command(0.0, abs(side_shift_speed), 0.0)
                 return True
 
             self.finish_ball_task_and_return(x, y, yaw)
@@ -1275,7 +1350,12 @@ class MultiStageOrangeYellowTaskNode(Node):
                         self.set_state('BALL_LATERAL_ALIGN')
                         return
 
-            self.send_center_cruise_command(ball)
+            vx = self.get_yellow_slowdown_speed(
+                yellow, self.stage1_cruise_forward_speed,
+                self.stage1_yellow_slow_speed,
+                self.yellow_slowdown_ratio_stage1
+            )
+            self.send_center_cruise_command(ball, vx)
             return
 
         if self.state == 'STAGE1_MOVE_RIGHT_FIXED_DISTANCE':
@@ -1355,7 +1435,12 @@ class MultiStageOrangeYellowTaskNode(Node):
                 self.set_state('STAGE2_ROTATE_LEFT_90')
                 return
 
-            self.send_velocity_command(self.cruise_forward_speed, 0.0, 0.0)
+            vx = self.get_yellow_slowdown_speed(
+                yellow, self.stage2_cruise_forward_speed,
+                self.stage2_yellow_slow_speed,
+                self.yellow_slowdown_ratio_stage2
+            )
+            self.send_velocity_command(vx, 0.0, 0.0)
             return
 
         if self.state == 'STAGE3_CRUISE_BALL_ONLY':
@@ -1378,7 +1463,12 @@ class MultiStageOrangeYellowTaskNode(Node):
                         self.set_state('BALL_LATERAL_ALIGN')
                         return
 
-            self.send_center_cruise_command(ball)
+            vx = self.get_yellow_slowdown_speed(
+                yellow, self.stage3_cruise_ball_only_speed,
+                self.stage3_yellow_slow_speed,
+                self.yellow_slowdown_ratio_stage3
+            )
+            self.send_center_cruise_command(ball, vx)
             return
 
         if self.state == 'STAGE3_FINAL_DECISION':
@@ -1395,7 +1485,12 @@ class MultiStageOrangeYellowTaskNode(Node):
                 self.set_state('STAGE3_SCAN_AND_HIT_LAST')
                 return
 
-            self.send_center_cruise_command(ball)
+            vx = self.get_yellow_slowdown_speed(
+                yellow, self.stage3_go_scan_speed,
+                self.stage3_go_scan_yellow_slow_speed,
+                self.yellow_slowdown_ratio_scan
+            )
+            self.send_center_cruise_command(ball, vx)
             return
 
         if self.state == 'STAGE3_SCAN_AND_HIT_LAST':
@@ -1411,7 +1506,7 @@ class MultiStageOrangeYellowTaskNode(Node):
                 self.set_state('BALL_LATERAL_ALIGN')
                 return
 
-            self.send_center_cruise_command(ball)
+            self.send_center_cruise_command(ball, self.stage3_go_scan_speed)
             return
 
         if self.state == 'STAGE3_GO_FINAL':
@@ -1419,7 +1514,12 @@ class MultiStageOrangeYellowTaskNode(Node):
                 self.set_state('STAGE3_ROTATE_LEFT_30')
                 return
 
-            self.send_center_cruise_command(ball)
+            vx = self.get_yellow_slowdown_speed(
+                yellow, self.stage3_go_final_speed,
+                self.stage3_go_final_yellow_slow_speed,
+                self.yellow_slowdown_ratio_final
+            )
+            self.send_center_cruise_command(ball, vx)
             return
 
         if self.state == 'DONE':
