@@ -510,6 +510,7 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.msg.gait_id = 0
         self._inc_life_count()
         self.Ctrl.Send_cmd(self.msg)
+        self.Ctrl.Wait_finish(16, 0)
         self.get_logger().info('[CMD] STOP', throttle_duration_sec=1.0)
 
     def send_velocity_command(self, vx: float, vy: float, wz: float):

@@ -26,21 +26,10 @@ def main(args=None):
         Ctrl.Send_cmd(msg)
         Ctrl.Wait_finish(12, 0)
 
-        msg.mode = 11
-        msg.gait_id = 3
-        msg.life_count += 1
-        msg.vel_des = [0.3,0,0]
-        msg.step_height = [0.05,0.05]
-        msg.rpy_des = [0.0,0.0,0.0]
-        Ctrl.Send_cmd(msg)
-
-        while 1:
-            pass
-
-        values = [0.0] * 12
-        values[0] = 0.0   # roll
-        values[2] = 0.25  # height
-        node.publish_yaml_vecxd("des_roll_pitch_height", values, is_user=1)
+        # values = [0.0] * 12
+        # values[0] = 0.0   # roll
+        # values[2] = 0.25  # height
+        # node.publish_yaml_vecxd("des_roll_pitch_height", values, is_user=1)
         
         # # 第五赛段上台阶步态
         # msg.mode = 11
@@ -136,55 +125,55 @@ def main(args=None):
         # Ctrl.Send_cmd(msg)
         # time.sleep(35)
 
-        # 平动离开坡度区
-        msg.mode = 11
-        msg.gait_id = 3
-        msg.life_count += 1
-        msg.vel_des = [0,-0.3,0]
-        msg.step_height = [0.05,0.05]
-        msg.rpy_des = [0.0,0.0,0.0]
-        Ctrl.Send_cmd(msg)
-        time.sleep(5)
+        # # 平动离开坡度区
+        # msg.mode = 11
+        # msg.gait_id = 3
+        # msg.life_count += 1
+        # msg.vel_des = [0,-0.3,0]
+        # msg.step_height = [0.05,0.05]
+        # msg.rpy_des = [0.0,0.0,0.0]
+        # Ctrl.Send_cmd(msg)
+        # time.sleep(5)
 
-        # 跳跃动作
-        msg.mode = 16
-        msg.gait_id = 3
-        msg.life_count += 1
-        Ctrl.Send_cmd(msg)
-        Ctrl.Wait_finish(16,3)
-        msg.mode = 12 # Recovery stand
-        msg.gait_id = 0
-        msg.life_count += 1 # Command will take effect when life_count update
-        Ctrl.Send_cmd(msg)
-        Ctrl.Wait_finish(12, 0)
+        # # 跳跃动作
+        # msg.mode = 16
+        # msg.gait_id = 3
+        # msg.life_count += 1
+        # Ctrl.Send_cmd(msg)
+        # Ctrl.Wait_finish(16,3)
+        # msg.mode = 12 # Recovery stand
+        # msg.gait_id = 0
+        # msg.life_count += 1 # Command will take effect when life_count update
+        # Ctrl.Send_cmd(msg)
+        # Ctrl.Wait_finish(12, 0)
 
-        values = [0.0] * 12
-        values[0] = 0.0   # roll
-        values[2] = 0.25  # height
-        node.publish_yaml_vecxd("des_roll_pitch_height", values, is_user=1)
+        # values = [0.0] * 12
+        # values[0] = 0.0   # roll
+        # values[2] = 0.25  # height
+        # node.publish_yaml_vecxd("des_roll_pitch_height", values, is_user=1)
 
-        # 结尾平路
-        msg.mode = 11
-        msg.gait_id = 3
-        msg.life_count += 1
-        msg.vel_des = [0.5,0,0]
-        msg.step_height = [0.05,0.05]
-        msg.rpy_des = [0.0,0.0,0.0]
-        Ctrl.Send_cmd(msg)
-        time.sleep(8)
+        # # 结尾平路
+        # msg.mode = 11
+        # msg.gait_id = 3
+        # msg.life_count += 1
+        # msg.vel_des = [0.5,0,0]
+        # msg.step_height = [0.05,0.05]
+        # msg.rpy_des = [0.0,0.0,0.0]
+        # Ctrl.Send_cmd(msg)
+        # time.sleep(8)
 
-        # 跳远
-        msg.mode = 16
-        msg.gait_id = 1
-        msg.life_count += 1
-        Ctrl.Send_cmd(msg)
-        Ctrl.Wait_finish(16,1)
+        # # 跳远
+        # msg.mode = 16
+        # msg.gait_id = 1
+        # msg.life_count += 1
+        # Ctrl.Send_cmd(msg)
+        # Ctrl.Wait_finish(16,1)
 
-        msg.mode = 12 # Recovery stand
-        msg.gait_id = 0
-        msg.life_count += 1 # Command will take effect when life_count update
-        Ctrl.Send_cmd(msg)
-        Ctrl.Wait_finish(12, 0)
+        # msg.mode = 12 # Recovery stand
+        # msg.gait_id = 0
+        # msg.life_count += 1 # Command will take effect when life_count update
+        # Ctrl.Send_cmd(msg)
+        # Ctrl.Wait_finish(12, 0)
 
     except KeyboardInterrupt:
         pass
