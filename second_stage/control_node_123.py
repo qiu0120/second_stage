@@ -11,6 +11,7 @@ from cv_bridge import CvBridge
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.time import Time
 from sensor_msgs.msg import Image
 from rclpy.qos import qos_profile_sensor_data
@@ -29,9 +30,15 @@ def quat_to_yaw(x: float, y: float, z: float, w: float) -> float:
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     return math.atan2(siny_cosp, cosy_cosp)
 
-class MultiStageOrangeYellowTaskNode(Node):
+class CombinedStage1Stage2Node(Node):
     def __init__(self):
-        super().__init__('multi_stage_orange_yellow_task_node')
+        super().__init__('combined_stage1_stage2_node')
+
+        # 使用仿真时间；如果 launch/yaml 已经设置过，这里失败也不影响运行。
+        try:
+            self.set_parameters([Parameter('use_sim_time', Parameter.Type.BOOL, True)])
+        except Exception as e:
+            self.get_logger().warn(f'failed to set use_sim_time: {e}')
 
         # =========================
         # 话题与 TF
@@ -41,11 +48,74 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.declare_parameter('global_frame', 'vodom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('control_hz', 30.0)
-        self.declare_parameter('initial_state', 'STAGE1_CRUISE_BALL_AND_YELLOW')
+        self.declare_parameter('initial_state', 'P1_STAND_WAIT')
+        self.declare_parameter('second_stage_initial_state', 'STAGE1_CRUISE_BALL_AND_YELLOW')
 
         # OpenCV 可视化窗口：只用于调试，不参与控制逻辑
         self.declare_parameter('show_debug_vis', True)
         self.declare_parameter('show_yellow_mask', False)
+
+        # =========================
+        # 第一赛段参数（全部加 p1_ 前缀，避免和第二赛段变量冲突）
+        # =========================
+        self.declare_parameter('p1_stand_wait_sec', 0)
+        self.declare_parameter('p1_stand_body_height', 0.28)
+
+        self.declare_parameter('p1_stage1_max_duration_sec', 8.0)
+        self.declare_parameter('p1_base_forward_speed', 0.40)
+        self.declare_parameter('p1_min_forward_speed', 0.20)
+        self.declare_parameter('p1_kp_turn', 0.25)
+        self.declare_parameter('p1_kp_lat', 0.15)
+        self.declare_parameter('p1_kd_slowdown', 0.05)
+        self.declare_parameter('p1_max_turn_speed', 0.15)
+        self.declare_parameter('p1_max_lateral_speed', 0.15)
+        self.declare_parameter('p1_vision_timeout_sec', 1.0)
+
+        self.declare_parameter('p1_brake_duration_sec', 0.3)
+        self.declare_parameter('p1_align_max_duration_sec', 3.0)
+        self.declare_parameter('p1_align_angle_deadband_rad', 0.05)
+        self.declare_parameter('p1_align_turn_kp', 0.4)
+        self.declare_parameter('p1_align_turn_max_wz', 0.10)
+
+        self.declare_parameter('p1_turn_duration_sec', 3.5)
+        self.declare_parameter('p1_turn_forward_vel', 0.13)
+        self.declare_parameter('p1_turn_yaw_vel', 0.50)
+
+        self.declare_parameter('p1_blue_target_distance_m', 0.25)
+        self.declare_parameter('p1_approach_blue_max_duration_sec', 6.0)
+        self.declare_parameter('p1_approach_blue_forward_speed', 0.20)
+
+        self.declare_parameter('p1_blind_left_duration_sec', 3.0)
+        self.declare_parameter('p1_blind_left_vy', 0.13)
+        self.declare_parameter('p1_blind_left_vx', 0.14)
+
+        self.declare_parameter('p1_yellow_h_min', 20)
+        self.declare_parameter('p1_yellow_h_max', 40)
+        self.declare_parameter('p1_yellow_s_min', 50)
+        self.declare_parameter('p1_yellow_s_max', 255)
+        self.declare_parameter('p1_yellow_v_min', 150)
+        self.declare_parameter('p1_yellow_v_max', 255)
+
+        self.declare_parameter('p1_stop_top_ratio', 0.80)
+        self.declare_parameter('p1_stop_bottom_ratio', 0.95)
+        self.declare_parameter('p1_stop_left_ratio', 0.35)
+        self.declare_parameter('p1_stop_right_ratio', 0.65)
+        self.declare_parameter('p1_stop_yellow_pixel_threshold', 1500)
+
+        self.declare_parameter('p1_nav_top_ratio', 0.90)
+        self.declare_parameter('p1_nav_bottom_ratio', 1.00)
+        self.declare_parameter('p1_nav_crop_left_ratio', 0.15)
+        self.declare_parameter('p1_nav_crop_right_ratio', 0.85)
+
+        self.declare_parameter('p1_blue_h_min', 100)
+        self.declare_parameter('p1_blue_h_max', 130)
+        self.declare_parameter('p1_blue_s_min', 100)
+        self.declare_parameter('p1_blue_s_max', 255)
+        self.declare_parameter('p1_blue_v_min', 50)
+        self.declare_parameter('p1_blue_v_max', 255)
+        self.declare_parameter('p1_blue_min_area', 6500.0)
+        self.declare_parameter('p1_blue_depth_patch_half', 1)
+
 
         # =========================
         # 状态机状态说明
@@ -244,30 +314,78 @@ class MultiStageOrangeYellowTaskNode(Node):
         # =========================
         # 撞击前冲：按仿真时间结束，不再用 TF 距离和 hit_extra_distance_m。
         self.declare_parameter('hit_forward_speed', 0.10)
-        self.declare_parameter('hit_forward_duration_sec', 1.5)
+        self.declare_parameter('hit_forward_duration_sec', 0.75)
 
         # 撞完后左右移动：固定速度 + 固定仿真时间。
         # 不再使用 post_hit_side_shift_distance_m / fast / slow / slowdown_ratio。
         self.declare_parameter('post_hit_side_shift_speed', 0.30)
-        self.declare_parameter('post_hit_side_shift_duration_sec', 3.0)
+        self.declare_parameter('post_hit_side_shift_duration_sec', 1.5)
 
         # =========================
         # 防重复撞同一颗球
         # =========================
         # 防重复触发现在只按仿真时间冷却判断，不再用 TF 位移。
-        self.declare_parameter('ball_retrigger_cooldown_sec', 1.0)
+        self.declare_parameter('ball_retrigger_cooldown_sec', 0.5)
 
         # 先按仿真时间移动一段，再按仿真时间转向一段。
         self.declare_parameter('stage3_final_left_shift_speed', 0.30)
-        self.declare_parameter('stage3_final_left_shift_duration_sec', 1.2)
+        self.declare_parameter('stage3_final_left_shift_duration_sec', 0.6)
         self.declare_parameter('stage3_final_rotate_wz', 0.30)
-        self.declare_parameter('stage3_final_rotate_duration_sec', 1.7)
+        self.declare_parameter('stage3_final_rotate_duration_sec', 0.8)
 
         # =========================
         # 第二段左跳后按仿真时间前进
         # =========================
         self.declare_parameter('stage2_forward_after_left_jump_speed', 0.3)
-        self.declare_parameter('stage2_forward_after_left_jump_duration_sec', 2.0)
+        self.declare_parameter('stage2_forward_after_left_jump_duration_sec', 0.3)
+
+        # =========================
+        # 第三赛段参数：S 弯巡航 + 出弯赛道对齐
+        # 来自 part3_2.0.py / part3_vision.py，合并后不再使用 /vision 中间话题。
+        # =========================
+        self.declare_parameter('p3_stand_wait_sec', 2.0)
+        self.declare_parameter('p3_stand_body_height', 0.20)
+        self.declare_parameter('p3_stand_pitch', 0.30)
+        self.declare_parameter('p3_step_height', 0.05)
+        self.declare_parameter('p3_align_step_height', 0.10)
+
+        self.declare_parameter('p3_s_curve_duration_sec', 16.5)
+        self.declare_parameter('p3_base_forward_speed', 0.35)
+        self.declare_parameter('p3_min_forward_speed', 0.00)
+        self.declare_parameter('p3_kp_turn', 1.2)
+        self.declare_parameter('p3_kp_lat', 0.2)
+        self.declare_parameter('p3_kd_slowdown', 0.10)
+        self.declare_parameter('p3_vision_timeout_sec', 1.0)
+        self.declare_parameter('p3_fallback_forward_speed', 0.10)
+
+        self.declare_parameter('p3_align_max_duration_sec', 8.0)
+        self.declare_parameter('p3_align_lat_tol', 0.08)
+        self.declare_parameter('p3_align_yaw_tol', 0.08)
+        self.declare_parameter('p3_align_lat_gain', 0.4)
+        self.declare_parameter('p3_align_yaw_gain', 0.8)
+        self.declare_parameter('p3_align_lat_max', 0.15)
+        self.declare_parameter('p3_align_yaw_max', 0.30)
+        self.declare_parameter('p3_align_search_vx', 0.10)
+        self.declare_parameter('p3_align_search_wz', 0.10)
+
+        self.declare_parameter('p3_yellow_h_min', 20)
+        self.declare_parameter('p3_yellow_h_max', 40)
+        self.declare_parameter('p3_yellow_s_min', 50)
+        self.declare_parameter('p3_yellow_s_max', 255)
+        self.declare_parameter('p3_yellow_v_min', 150)
+        self.declare_parameter('p3_yellow_v_max', 255)
+        self.declare_parameter('p3_crop_left_ratio', 0.10)
+        self.declare_parameter('p3_crop_right_ratio', 0.90)
+        self.declare_parameter('p3_mid_top_ratio', 0.85)
+        self.declare_parameter('p3_mid_bottom_ratio', 0.95)
+        self.declare_parameter('p3_near_top_ratio', 0.95)
+        self.declare_parameter('p3_near_bottom_ratio', 1.00)
+
+        self.declare_parameter('p3_align_near_y_ratio', 0.90)
+        self.declare_parameter('p3_align_far_y_ratio', 0.70)
+        self.declare_parameter('p3_align_roi_left_ratio', 0.15)
+        self.declare_parameter('p3_align_roi_right_ratio', 0.85)
+        self.declare_parameter('p3_align_min_gap_px', 30)
 
         # =========================
         # 读取参数
@@ -278,8 +396,71 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.base_frame = self.get_parameter('base_frame').value
         self.control_hz = float(self.get_parameter('control_hz').value)
         self.initial_state = self.get_parameter('initial_state').value
+        self.second_stage_initial_state = self.get_parameter('second_stage_initial_state').value
         self.show_debug_vis = bool(self.get_parameter('show_debug_vis').value)
         self.show_yellow_mask = bool(self.get_parameter('show_yellow_mask').value)
+
+        # =========================
+        # 读取第一赛段参数（p1_ 前缀）
+        # =========================
+        self.p1_stand_wait_sec = float(self.get_parameter('p1_stand_wait_sec').value)
+        self.p1_stand_body_height = float(self.get_parameter('p1_stand_body_height').value)
+
+        self.p1_stage1_max_duration_sec = float(self.get_parameter('p1_stage1_max_duration_sec').value)
+        self.p1_base_forward_speed = float(self.get_parameter('p1_base_forward_speed').value)
+        self.p1_min_forward_speed = float(self.get_parameter('p1_min_forward_speed').value)
+        self.p1_kp_turn = float(self.get_parameter('p1_kp_turn').value)
+        self.p1_kp_lat = float(self.get_parameter('p1_kp_lat').value)
+        self.p1_kd_slowdown = float(self.get_parameter('p1_kd_slowdown').value)
+        self.p1_max_turn_speed = float(self.get_parameter('p1_max_turn_speed').value)
+        self.p1_max_lateral_speed = float(self.get_parameter('p1_max_lateral_speed').value)
+        self.p1_vision_timeout_sec = float(self.get_parameter('p1_vision_timeout_sec').value)
+
+        self.p1_brake_duration_sec = float(self.get_parameter('p1_brake_duration_sec').value)
+        self.p1_align_max_duration_sec = float(self.get_parameter('p1_align_max_duration_sec').value)
+        self.p1_align_angle_deadband_rad = float(self.get_parameter('p1_align_angle_deadband_rad').value)
+        self.p1_align_turn_kp = float(self.get_parameter('p1_align_turn_kp').value)
+        self.p1_align_turn_max_wz = float(self.get_parameter('p1_align_turn_max_wz').value)
+
+        self.p1_turn_duration_sec = float(self.get_parameter('p1_turn_duration_sec').value)
+        self.p1_turn_forward_vel = float(self.get_parameter('p1_turn_forward_vel').value)
+        self.p1_turn_yaw_vel = float(self.get_parameter('p1_turn_yaw_vel').value)
+
+        self.p1_blue_target_distance_m = float(self.get_parameter('p1_blue_target_distance_m').value)
+        self.p1_approach_blue_max_duration_sec = float(self.get_parameter('p1_approach_blue_max_duration_sec').value)
+        self.p1_approach_blue_forward_speed = float(self.get_parameter('p1_approach_blue_forward_speed').value)
+
+        self.p1_blind_left_duration_sec = float(self.get_parameter('p1_blind_left_duration_sec').value)
+        self.p1_blind_left_vy = float(self.get_parameter('p1_blind_left_vy').value)
+        self.p1_blind_left_vx = float(self.get_parameter('p1_blind_left_vx').value)
+
+        self.p1_yellow_h_min = int(self.get_parameter('p1_yellow_h_min').value)
+        self.p1_yellow_h_max = int(self.get_parameter('p1_yellow_h_max').value)
+        self.p1_yellow_s_min = int(self.get_parameter('p1_yellow_s_min').value)
+        self.p1_yellow_s_max = int(self.get_parameter('p1_yellow_s_max').value)
+        self.p1_yellow_v_min = int(self.get_parameter('p1_yellow_v_min').value)
+        self.p1_yellow_v_max = int(self.get_parameter('p1_yellow_v_max').value)
+
+        self.p1_stop_top_ratio = float(self.get_parameter('p1_stop_top_ratio').value)
+        self.p1_stop_bottom_ratio = float(self.get_parameter('p1_stop_bottom_ratio').value)
+        self.p1_stop_left_ratio = float(self.get_parameter('p1_stop_left_ratio').value)
+        self.p1_stop_right_ratio = float(self.get_parameter('p1_stop_right_ratio').value)
+        self.p1_stop_yellow_pixel_threshold = int(self.get_parameter('p1_stop_yellow_pixel_threshold').value)
+
+        self.p1_nav_top_ratio = float(self.get_parameter('p1_nav_top_ratio').value)
+        self.p1_nav_bottom_ratio = float(self.get_parameter('p1_nav_bottom_ratio').value)
+        self.p1_nav_crop_left_ratio = float(self.get_parameter('p1_nav_crop_left_ratio').value)
+        self.p1_nav_crop_right_ratio = float(self.get_parameter('p1_nav_crop_right_ratio').value)
+
+        self.p1_blue_h_min = int(self.get_parameter('p1_blue_h_min').value)
+        self.p1_blue_h_max = int(self.get_parameter('p1_blue_h_max').value)
+        self.p1_blue_s_min = int(self.get_parameter('p1_blue_s_min').value)
+        self.p1_blue_s_max = int(self.get_parameter('p1_blue_s_max').value)
+        self.p1_blue_v_min = int(self.get_parameter('p1_blue_v_min').value)
+        self.p1_blue_v_max = int(self.get_parameter('p1_blue_v_max').value)
+        self.p1_blue_min_area = float(self.get_parameter('p1_blue_min_area').value)
+        self.p1_blue_depth_patch_half = int(self.get_parameter('p1_blue_depth_patch_half').value)
+
 
         self.orange_h_min = int(self.get_parameter('orange_h_min').value)
         self.orange_h_max = int(self.get_parameter('orange_h_max').value)
@@ -389,6 +570,50 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.stage2_forward_after_left_jump_speed = float(self.get_parameter('stage2_forward_after_left_jump_speed').value)
         self.stage2_forward_after_left_jump_duration_sec = float(self.get_parameter('stage2_forward_after_left_jump_duration_sec').value)
 
+        self.p3_stand_wait_sec = float(self.get_parameter('p3_stand_wait_sec').value)
+        self.p3_stand_body_height = float(self.get_parameter('p3_stand_body_height').value)
+        self.p3_stand_pitch = float(self.get_parameter('p3_stand_pitch').value)
+        self.p3_step_height = float(self.get_parameter('p3_step_height').value)
+        self.p3_align_step_height = float(self.get_parameter('p3_align_step_height').value)
+
+        self.p3_s_curve_duration_sec = float(self.get_parameter('p3_s_curve_duration_sec').value)
+        self.p3_base_forward_speed = float(self.get_parameter('p3_base_forward_speed').value)
+        self.p3_min_forward_speed = float(self.get_parameter('p3_min_forward_speed').value)
+        self.p3_kp_turn = float(self.get_parameter('p3_kp_turn').value)
+        self.p3_kp_lat = float(self.get_parameter('p3_kp_lat').value)
+        self.p3_kd_slowdown = float(self.get_parameter('p3_kd_slowdown').value)
+        self.p3_vision_timeout_sec = float(self.get_parameter('p3_vision_timeout_sec').value)
+        self.p3_fallback_forward_speed = float(self.get_parameter('p3_fallback_forward_speed').value)
+
+        self.p3_align_max_duration_sec = float(self.get_parameter('p3_align_max_duration_sec').value)
+        self.p3_align_lat_tol = float(self.get_parameter('p3_align_lat_tol').value)
+        self.p3_align_yaw_tol = float(self.get_parameter('p3_align_yaw_tol').value)
+        self.p3_align_lat_gain = float(self.get_parameter('p3_align_lat_gain').value)
+        self.p3_align_yaw_gain = float(self.get_parameter('p3_align_yaw_gain').value)
+        self.p3_align_lat_max = float(self.get_parameter('p3_align_lat_max').value)
+        self.p3_align_yaw_max = float(self.get_parameter('p3_align_yaw_max').value)
+        self.p3_align_search_vx = float(self.get_parameter('p3_align_search_vx').value)
+        self.p3_align_search_wz = float(self.get_parameter('p3_align_search_wz').value)
+
+        self.p3_yellow_h_min = int(self.get_parameter('p3_yellow_h_min').value)
+        self.p3_yellow_h_max = int(self.get_parameter('p3_yellow_h_max').value)
+        self.p3_yellow_s_min = int(self.get_parameter('p3_yellow_s_min').value)
+        self.p3_yellow_s_max = int(self.get_parameter('p3_yellow_s_max').value)
+        self.p3_yellow_v_min = int(self.get_parameter('p3_yellow_v_min').value)
+        self.p3_yellow_v_max = int(self.get_parameter('p3_yellow_v_max').value)
+        self.p3_crop_left_ratio = float(self.get_parameter('p3_crop_left_ratio').value)
+        self.p3_crop_right_ratio = float(self.get_parameter('p3_crop_right_ratio').value)
+        self.p3_mid_top_ratio = float(self.get_parameter('p3_mid_top_ratio').value)
+        self.p3_mid_bottom_ratio = float(self.get_parameter('p3_mid_bottom_ratio').value)
+        self.p3_near_top_ratio = float(self.get_parameter('p3_near_top_ratio').value)
+        self.p3_near_bottom_ratio = float(self.get_parameter('p3_near_bottom_ratio').value)
+
+        self.p3_align_near_y_ratio = float(self.get_parameter('p3_align_near_y_ratio').value)
+        self.p3_align_far_y_ratio = float(self.get_parameter('p3_align_far_y_ratio').value)
+        self.p3_align_roi_left_ratio = float(self.get_parameter('p3_align_roi_left_ratio').value)
+        self.p3_align_roi_right_ratio = float(self.get_parameter('p3_align_roi_right_ratio').value)
+        self.p3_align_min_gap_px = int(self.get_parameter('p3_align_min_gap_px').value)
+
         # =========================
         # 控制接口
         # =========================
@@ -399,6 +624,37 @@ class MultiStageOrangeYellowTaskNode(Node):
             self.msg.life_count = 0
 
         self.bridge = CvBridge()
+
+        # =========================
+        # 第一赛段运行缓存（全部 p1_ 前缀，避免覆盖第二赛段 latest_* / yellow_* / ball_*）
+        # =========================
+        self.p1_state_start_time: Optional[float] = None
+        self.p1_stand_sent = False
+        self.p1_lateral_force = 0.0
+        self.p1_stop_angle = 0.0
+        self.p1_stop_flag = 0.0
+        self.p1_last_update_time = 0.0
+        self.p1_blue_distance_m = 0.0
+        self.p1_blue_count = 0.0
+        self.p1_blue_detections = []
+        self.p1_latest_mask_yellow = None
+
+        # =========================
+        # 第三赛段运行缓存（p3_ 前缀）
+        # =========================
+        self.p3_state_start_time: Optional[float] = None
+        self.p3_stand_sent = False
+        self.p3_error_mid = 0.0
+        self.p3_error_near = 0.0
+        self.p3_last_update_time = 0.0
+        self.p3_s4_lat = 0.0
+        self.p3_s4_yaw = 0.0
+        self.p3_s4_valid = 0.0
+        self.p3_latest_mask = None
+        self.p3_latest_mask_mid = None
+        self.p3_latest_mask_near = None
+        self.p3_align_near_center = -1.0
+        self.p3_align_far_center = -1.0
 
         self.latest_depth = None
         self.latest_depth_encoding = None
@@ -449,7 +705,9 @@ class MultiStageOrangeYellowTaskNode(Node):
         }
 
         self.state = self.initial_state
-        self.ball_return_state = self.initial_state
+        # 整合后 initial_state 是 P1_STAND_WAIT；撞球子链回退状态必须默认指向第二赛段入口，
+        # 避免异常路径下撞球结束后跳回第一赛段。
+        self.ball_return_state = self.second_stage_initial_state
 
         self.yellow_stop_counter = 0
 
@@ -495,11 +753,287 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.send_stop_command()
         self.Ctrl.Wait_finish(12, 0)
 
-        self.get_logger().info('MultiStageOrangeYellowTaskNode started.')
+        self.get_logger().info('CombinedStage1Stage2Node started.')
         self.get_logger().info(f'initial_state={self.state}')
         self.get_logger().info(f'rgb_topic={self.rgb_topic}')
         self.get_logger().info(f'depth_topic={self.depth_topic}')
         self.get_logger().info(f'tf: {self.global_frame} -> {self.base_frame}')
+
+
+    # ============================================================
+    # 第一赛段工具 / 视觉 / 控制状态机
+    # ============================================================
+    def p1_elapsed_in_state(self) -> float:
+        now = self.now_sec()
+        if self.p1_state_start_time is None:
+            self.p1_state_start_time = now
+        return now - self.p1_state_start_time
+
+    def p1_send_stand_command(self):
+        self.msg.mode = 12
+        self.msg.gait_id = 0
+        self._inc_life_count()
+        self.msg.rpy_des = [0.0, 0.0, 0.0]
+        self.msg.pos_des = [0.0, 0.0, self.p1_stand_body_height]
+        self.Ctrl.Send_cmd(self.msg)
+        self.get_logger().info('[P1 CMD] STAND', throttle_duration_sec=1.0)
+
+    def p1_depth_to_meters_patch(self, patch: np.ndarray):
+        if patch is None or patch.size == 0:
+            return None
+
+        if self.latest_depth_encoding == '16UC1':
+            patch_m = patch.astype(np.float32) / 1000.0
+        elif self.latest_depth_encoding == '32FC1':
+            patch_m = patch.astype(np.float32)
+        else:
+            patch_m = patch.astype(np.float32)
+
+        valid = patch_m[np.isfinite(patch_m)]
+        valid = valid[(valid > self.valid_min_depth_m) & (valid < self.valid_max_depth_m)]
+        if valid.size == 0:
+            return None
+        return float(np.median(valid))
+
+    def p1_process_stage1_yellow(self, frame: np.ndarray):
+        h, w = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower_yellow = np.array([self.p1_yellow_h_min, self.p1_yellow_s_min, self.p1_yellow_v_min], dtype=np.uint8)
+        upper_yellow = np.array([self.p1_yellow_h_max, self.p1_yellow_s_max, self.p1_yellow_v_max], dtype=np.uint8)
+        mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        self.p1_latest_mask_yellow = mask_yellow
+
+        lateral_force = 0.0
+        stop_angle = 0.0
+        stop_flag = 0.0
+
+        stop_top = int(h * self.p1_stop_top_ratio)
+        stop_bottom = int(h * self.p1_stop_bottom_ratio)
+        stop_left = int(w * self.p1_stop_left_ratio)
+        stop_right = int(w * self.p1_stop_right_ratio)
+        mask_stop = mask_yellow[stop_top:stop_bottom, stop_left:stop_right]
+
+        if cv2.countNonZero(mask_stop) > self.p1_stop_yellow_pixel_threshold:
+            stop_flag = 1.0
+            contours, _ = cv2.findContours(mask_stop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                c = max(contours, key=cv2.contourArea)
+                rect = cv2.minAreaRect(c)
+                box = cv2.boxPoints(rect).astype(np.int32)
+                box_sorted = sorted(box, key=lambda p: p[0])
+                left_pt, right_pt = box_sorted[0], box_sorted[-1]
+                dx = right_pt[0] - left_pt[0]
+                dy = right_pt[1] - left_pt[1]
+                stop_angle = float(np.arctan2(dy, dx)) if dx != 0 else 0.0
+
+        nav_top = int(h * self.p1_nav_top_ratio)
+        nav_bottom = int(h * self.p1_nav_bottom_ratio)
+        crop_left = int(w * self.p1_nav_crop_left_ratio)
+        crop_right = int(w * self.p1_nav_crop_right_ratio)
+        mask_nav = np.zeros_like(mask_yellow)
+        mask_nav[nav_top:nav_bottom, crop_left:crop_right] = mask_yellow[nav_top:nav_bottom, crop_left:crop_right]
+
+        M_nav = cv2.moments(mask_nav)
+        if M_nav['m00'] > 0:
+            cx_nav = int(M_nav['m10'] / M_nav['m00'])
+            dist_nav = abs(cx_nav - w / 2)
+            force_nav = ((w / 2 - dist_nav) / (w / 2)) ** 3
+            lateral_force = float(force_nav) if cx_nav > w / 2 else -float(force_nav)
+
+        self.p1_lateral_force = lateral_force
+        self.p1_stop_angle = stop_angle
+        self.p1_stop_flag = stop_flag
+        self.p1_last_update_time = self.now_sec()
+
+    def p1_process_blue_ball(self, frame: np.ndarray):
+        self.p1_blue_detections = []
+        self.p1_blue_distance_m = 0.0
+        self.p1_blue_count = 0.0
+
+        if self.latest_depth is None:
+            return
+
+        h, w = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower_blue = np.array([self.p1_blue_h_min, self.p1_blue_s_min, self.p1_blue_v_min], dtype=np.uint8)
+        upper_blue = np.array([self.p1_blue_h_max, self.p1_blue_s_max, self.p1_blue_v_max], dtype=np.uint8)
+        mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+        contours, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        valid_depths = []
+        dh, dw = self.latest_depth.shape[:2]
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area <= self.p1_blue_min_area:
+                continue
+            M = cv2.moments(cnt)
+            if M['m00'] <= 0:
+                continue
+            cx = int(M['m10'] / M['m00'])
+            cy = int(M['m01'] / M['m00'])
+            dx = int(cx * dw / max(w, 1))
+            dy = int(cy * dh / max(h, 1))
+            half = self.p1_blue_depth_patch_half
+            x1 = max(0, dx - half)
+            x2 = min(dw, dx + half + 1)
+            y1 = max(0, dy - half)
+            y2 = min(dh, dy + half + 1)
+            depth_m = self.p1_depth_to_meters_patch(self.latest_depth[y1:y2, x1:x2])
+            if depth_m is None:
+                continue
+            valid_depths.append(depth_m)
+            self.p1_blue_detections.append({'center': (cx, cy), 'depth_m': depth_m, 'area': float(area)})
+
+        if valid_depths:
+            self.p1_blue_count = float(len(valid_depths))
+            self.p1_blue_distance_m = float(min(valid_depths))
+
+    def p1_control_loop(self):
+        now = self.now_sec()
+        if now <= 0.0:
+            return
+
+        elapsed = self.p1_elapsed_in_state()
+
+        if self.state == 'P1_STAND_WAIT':
+            if not self.p1_stand_sent:
+                self.get_logger().info('[P1] 起立')
+                self.p1_send_stand_command()
+                self.p1_stand_sent = True
+            if elapsed >= self.p1_stand_wait_sec:
+                self.get_logger().info('[P1] 开始第一赛段黄线纠偏巡航')
+                self.set_state('P1_STAGE1_CRUISE')
+            return
+
+        if self.state == 'P1_STAGE1_CRUISE':
+            if self.p1_stop_flag > 0.5:
+                self.get_logger().info('[P1] 看到横向黄线，进入刹车缓冲')
+                self.set_state('P1_BRAKE_BUFFER')
+                return
+
+            if elapsed >= self.p1_stage1_max_duration_sec:
+                self.get_logger().info('[P1] 第一赛段行走超时，进入刹车缓冲')
+                self.set_state('P1_BRAKE_BUFFER')
+                return
+
+            if now - self.p1_last_update_time < self.p1_vision_timeout_sec:
+                err = self.p1_lateral_force
+                turn_speed = clamp(err * self.p1_kp_turn, -self.p1_max_turn_speed, self.p1_max_turn_speed)
+                lateral_speed = clamp(err * self.p1_kp_lat, -self.p1_max_lateral_speed, self.p1_max_lateral_speed)
+                speed_drop = abs(err) * self.p1_kd_slowdown
+                forward_speed = max(self.p1_min_forward_speed, self.p1_base_forward_speed - speed_drop)
+            else:
+                forward_speed = self.p1_base_forward_speed
+                lateral_speed = 0.0
+                turn_speed = 0.0
+
+            self.send_velocity_command(forward_speed, lateral_speed, turn_speed, step_height=0.13)
+            return
+
+        if self.state == 'P1_BRAKE_BUFFER':
+            if elapsed >= self.p1_brake_duration_sec:
+                self.get_logger().info('[P1] 开始根据横线角度调平')
+                self.set_state('P1_ALIGN_STOP_LINE')
+                return
+            self.send_velocity_command(0.0, 0.0, 0.0, step_height=0.13)
+            return
+
+        if self.state == 'P1_ALIGN_STOP_LINE':
+            angle_err = self.p1_stop_angle
+            if abs(angle_err) < self.p1_align_angle_deadband_rad or self.p1_stop_flag < 0.5:
+                self.get_logger().info(f'[P1] 调平完成或横线离开视野，angle_err={angle_err:.3f}')
+                self.set_state('P1_TURN_LEFT_TO_STAGE2')
+                return
+
+            if elapsed >= self.p1_align_max_duration_sec:
+                self.get_logger().info('[P1] 调平超时，进入左转')
+                self.set_state('P1_TURN_LEFT_TO_STAGE2')
+                return
+
+            turn_speed = clamp(angle_err * self.p1_align_turn_kp, -self.p1_align_turn_max_wz, self.p1_align_turn_max_wz)
+            self.send_velocity_command(0.0, 0.0, turn_speed, step_height=0.13)
+            return
+
+        if self.state == 'P1_TURN_LEFT_TO_STAGE2':
+            if elapsed >= self.p1_turn_duration_sec:
+                self.get_logger().info('[P1] 左转结束，开始寻找蓝球并前进')
+                self.set_state('P1_APPROACH_BLUE_BALL')
+                return
+            self.send_velocity_command(self.p1_turn_forward_vel, 0.0, self.p1_turn_yaw_vel, step_height=0.13)
+            return
+
+        if self.state == 'P1_APPROACH_BLUE_BALL':
+            if self.p1_blue_count >= 1.0:
+                self.get_logger().info(
+                    f'[P1] 锁定蓝球距离: {self.p1_blue_distance_m:.2f}m',
+                    throttle_duration_sec=0.5
+                )
+                if self.p1_blue_distance_m <= self.p1_blue_target_distance_m:
+                    self.get_logger().info('[P1] 到达蓝球目标距离，进入盲走左移')
+                    self.set_state('P1_BLIND_LEFT_SHIFT')
+                    return
+
+            if elapsed >= self.p1_approach_blue_max_duration_sec:
+                self.get_logger().info('[P1] 找蓝球前进超时，进入盲走左移')
+                self.set_state('P1_BLIND_LEFT_SHIFT')
+                return
+
+            self.send_velocity_command(self.p1_approach_blue_forward_speed, 0.0, 0.0, step_height=0.10)
+            return
+
+        if self.state == 'P1_BLIND_LEFT_SHIFT':
+            if elapsed >= self.p1_blind_left_duration_sec:
+                # 关键：这里仍然不发 STOP，但进入第二赛段前重置第二赛段缓存，
+                # 让第二赛段表现更接近“单独启动第二赛段”。
+                self.get_logger().info(f'[P1] 第一赛段结束，不停顿切入第二赛段: {self.second_stage_initial_state}')
+                self.enter_second_stage()
+                return
+
+            self.send_velocity_command(self.p1_blind_left_vx, self.p1_blind_left_vy, 0.0, step_height=0.10)
+            return
+
+        # 兜底：如果 P1 状态写错，直接切入第二赛段，避免卡死。
+        self.get_logger().warn(f'[P1] unknown state={self.state}, jump to {self.second_stage_initial_state}')
+        self.enter_second_stage()
+
+    def enter_second_stage(self):
+        """
+        第一赛段结束后进入第二赛段。
+        注意：这里不发送 STOP，保持连续衔接；只清理第二赛段内部状态缓存，
+        尽量让第二赛段像单独启动时一样，从干净的状态机变量开始。
+        """
+        # 第二赛段黄线/球处理相关计数器
+        self.yellow_stop_counter = 0
+        self.stage1_yellow_touched_bottom = False
+        self.stage1_yellow_disappear_counter = 0
+
+        # 撞球子链相关缓存
+        self.lateral_align_counter = 0
+        self.hit_start_pose = None
+        self.hit_start_depth_m = None
+        self.hit_start_time_sec = None
+        self.post_hit_side_shift_start_pose = None
+        self.post_hit_side_shift_start_time_sec = None
+        self.last_hit_side = None
+        self.side_shift_done = False
+        self.ball_return_state = self.second_stage_initial_state
+
+        # 第二赛段按时间运动状态缓存
+        self.stage2_forward_after_left_jump_start_time_sec = None
+        self.stage3_final_left_shift_start_time_sec = None
+        self.stage3_final_rotate_start_time_sec = None
+
+        # 防重复撞球缓存：进入第二赛段时清空，避免第一赛段运动时间影响第二赛段第一次触发。
+        self.last_ball_done_time_sec = None
+        self.last_ball_done_pose = None
+
+        # 如果当前已经有最新图像，进入第二赛段前立刻用第二赛段算法刷新一次视觉结果，
+        # 避免刚切状态的第一个 control tick 使用 P1 阶段的旧缓存。
+        if self.latest_bgr is not None:
+            self.latest_ball_result = self.detect_ball_scene(self.latest_bgr)
+            self.latest_yellow_result = self.detect_yellow_stop_line(self.latest_bgr)
+
+        self.set_state(self.second_stage_initial_state)
 
     # ============================================================
     # 基础工具
@@ -545,12 +1079,12 @@ class MultiStageOrangeYellowTaskNode(Node):
         self.Ctrl.Wait_finish(12, 0)
         self.get_logger().info('[CMD] STOP', throttle_duration_sec=1.0)
 
-    def send_velocity_command(self, vx: float, vy: float, wz: float):
+    def send_velocity_command(self, vx: float, vy: float, wz: float, step_height: float = 0.02):
         self.msg.mode = 11
         self.msg.gait_id = 3
         self._inc_life_count()
         self.msg.vel_des = [vx, vy, wz]
-        self.msg.step_height = [0.02, 0.02]
+        self.msg.step_height = [step_height, step_height]
         self.msg.rpy_des = [0.0, 0.0, 0.0]
         self.Ctrl.Send_cmd(self.msg)
         self.get_logger().info(
@@ -634,11 +1168,24 @@ class MultiStageOrangeYellowTaskNode(Node):
             return
 
         self.latest_bgr = frame
-        self.latest_ball_result = self.detect_ball_scene(frame)
-        self.latest_yellow_result = self.detect_yellow_stop_line(frame)
 
-        if self.show_debug_vis:
-            self.show_debug_window(frame)
+        if isinstance(self.state, str) and self.state.startswith('P1_'):
+            # 第一赛段运行时，只更新第一赛段视觉缓存。
+            self.p1_process_stage1_yellow(frame)
+            self.p1_process_blue_ball(frame)
+            if self.show_debug_vis:
+                self.show_debug_window(frame)
+        elif isinstance(self.state, str) and self.state.startswith('P3_'):
+            # 第三赛段运行时，只跑第三赛段黄线/S弯视觉，避免第二赛段球检测增加负载。
+            self.p3_process_yellow_track(frame)
+            if self.show_debug_vis:
+                self.p3_show_debug_window(frame)
+        else:
+            # 第二赛段运行时，只跑第二赛段原本的视觉逻辑。
+            self.latest_ball_result = self.detect_ball_scene(frame)
+            self.latest_yellow_result = self.detect_yellow_stop_line(frame)
+            if self.show_debug_vis:
+                self.show_debug_window(frame)
 
     # ============================================================
     # 深度查值
@@ -1000,6 +1547,14 @@ class MultiStageOrangeYellowTaskNode(Node):
             self.get_logger().info(f'STATE: {self.state} -> {new_state}')
             self.state = new_state
 
+            if new_state.startswith('P1_'):
+                self.p1_state_start_time = None
+
+            if new_state.startswith('P3_'):
+                self.p3_state_start_time = None
+                if new_state == 'P3_STAND_WAIT':
+                    self.p3_stand_sent = False
+
             if new_state in (
                 'STAGE1_CRUISE_BALL_AND_YELLOW',
                 'STAGE2_CRUISE_YELLOW_ONLY',
@@ -1024,6 +1579,22 @@ class MultiStageOrangeYellowTaskNode(Node):
 
             if new_state == 'BALL_LATERAL_ALIGN':
                 self.lateral_align_counter = 0
+                # 锁定“开始对齐时”的目标球所在侧。
+                # 后面对齐过程中目标球可能因为机器人横移跑到画面另一边，
+                # 撞后横移方向仍然使用这里锁定的初始 side，不再在撞击前冲时覆盖。
+                target = self.latest_ball_result.get('best_target_ball') if isinstance(self.latest_ball_result, dict) else None
+                if target is not None:
+                    self.last_hit_side = target.get('side')
+                    self.get_logger().info(
+                        f'BALL_LATERAL_ALIGN lock hit side at align start: '
+                        f'last_hit_side={self.last_hit_side}, '
+                        f'target_center={target.get("center")}, '
+                        f'error_x={target.get("error_x")}, '
+                        f'depth={target.get("depth_m")}'
+                    )
+                else:
+                    self.last_hit_side = None
+                    self.get_logger().warn('BALL_LATERAL_ALIGN start but target is None; last_hit_side=None')
 
             if new_state == 'BALL_HIT_CONFIRM_FORWARD':
                 self.hit_start_pose = None
@@ -1606,11 +2177,12 @@ class MultiStageOrangeYellowTaskNode(Node):
             if self.hit_start_time_sec is None:
                 self.hit_start_time_sec = now_sec
 
+                # last_hit_side 不再在这里记录/覆盖。
+                # 它已经在进入 BALL_LATERAL_ALIGN 的第一刻锁定，避免对齐过程中
+                # 球从画面左侧跑到右侧后，撞后横移方向被错误改掉。
                 if target is not None:
-                    self.last_hit_side = target['side']
                     self.hit_start_depth_m = target.get('depth_m')
                 else:
-                    self.last_hit_side = None
                     self.hit_start_depth_m = None
 
                 self.get_logger().info(
@@ -1676,9 +2248,254 @@ class MultiStageOrangeYellowTaskNode(Node):
         return False
 
     # ============================================================
+    # 第三赛段：视觉处理 + 控制状态机
+    # ============================================================
+    def p3_elapsed_in_state(self) -> float:
+        now = self.now_sec()
+        if self.p3_state_start_time is None:
+            self.p3_state_start_time = now
+        return now - self.p3_state_start_time
+
+    def p3_send_stand_command(self):
+        self.msg.mode = 12
+        self.msg.gait_id = 0
+        self._inc_life_count()
+        self.msg.rpy_des = [0.0, self.p3_stand_pitch, 0.0]
+        self.msg.pos_des = [0.0, 0.0, self.p3_stand_body_height]
+        self.Ctrl.Send_cmd(self.msg)
+        self.get_logger().info('[P3 CMD] STAND / LOW BODY', throttle_duration_sec=1.0)
+
+    def p3_send_velocity_command(self, vx: float, vy: float, wz: float, step_height: Optional[float] = None):
+        self.msg.mode = 11
+        self.msg.gait_id = 3
+        self._inc_life_count()
+        h = self.p3_step_height if step_height is None else float(step_height)
+        self.msg.step_height = [h, h]
+        self.msg.rpy_des = [0.0, self.p3_stand_pitch, 0.0]
+        self.msg.pos_des = [0.0, 0.0, self.p3_stand_body_height]
+        self.msg.vel_des = [float(vx), float(vy), float(wz)]
+        self.Ctrl.Send_cmd(self.msg)
+        self.get_logger().info(
+            f'[P3 CMD] vel_des=[{vx:.3f}, {vy:.3f}, {wz:.3f}], step_height={h:.3f}',
+            throttle_duration_sec=0.4
+        )
+
+    def p3_process_yellow_track(self, frame: np.ndarray):
+        """
+        合并 part3_vision.py：
+        1. S 弯阶段：计算中距离 error_mid 和近距离 error_near。
+        2. 出弯对齐阶段：双行前瞻，计算 s4_lat / s4_yaw / s4_valid。
+        """
+        height, width = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        lower_yellow = np.array([self.p3_yellow_h_min, self.p3_yellow_s_min, self.p3_yellow_v_min], dtype=np.uint8)
+        upper_yellow = np.array([self.p3_yellow_h_max, self.p3_yellow_s_max, self.p3_yellow_v_max], dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+        crop_left = int(width * self.p3_crop_left_ratio)
+        crop_right = int(width * self.p3_crop_right_ratio)
+        mask[:, 0:crop_left] = 0
+        mask[:, crop_right:width] = 0
+
+        mid_top = int(height * self.p3_mid_top_ratio)
+        mid_bottom = int(height * self.p3_mid_bottom_ratio)
+        near_top = int(height * self.p3_near_top_ratio)
+        near_bottom = int(height * self.p3_near_bottom_ratio)
+
+        mask_mid = np.zeros_like(mask)
+        mask_near = np.zeros_like(mask)
+        mask_mid[mid_top:mid_bottom, 0:width] = mask[mid_top:mid_bottom, 0:width]
+        mask_near[near_top:near_bottom, 0:width] = mask[near_top:near_bottom, 0:width]
+
+        err_mid = 0.0
+        err_near = 0.0
+
+        M_mid = cv2.moments(mask_mid)
+        if M_mid['m00'] > 0:
+            cx_mid = int(M_mid['m10'] / M_mid['m00'])
+            dist_mid = abs(cx_mid - width / 2)
+            force_mid = ((width / 2 - dist_mid) / (width / 2)) ** 3
+            err_mid = float(force_mid) if cx_mid > width / 2 else -float(force_mid)
+
+        M_near = cv2.moments(mask_near)
+        if M_near['m00'] > 0:
+            cx_near = int(M_near['m10'] / M_near['m00'])
+            dist_near = abs(cx_near - width / 2)
+            force_near = ((width / 2 - dist_near) / (width / 2)) ** 3
+            err_near = float(force_near) if cx_near > width / 2 else -float(force_near)
+
+        self.p3_error_mid = err_mid
+        self.p3_error_near = err_near
+        self.p3_last_update_time = self.now_sec()
+
+        near_y = int(height * self.p3_align_near_y_ratio)
+        far_y = int(height * self.p3_align_far_y_ratio)
+        roi_left = int(width * self.p3_align_roi_left_ratio)
+        roi_right = int(width * self.p3_align_roi_right_ratio)
+
+        def get_road_center(y_idx: int) -> float:
+            y_idx = max(0, min(height - 1, int(y_idx)))
+            row = mask[y_idx, :]
+            yellow_idx = np.where(row > 128)[0]
+            valid_idx = [idx for idx in yellow_idx if roi_left < idx < roi_right]
+            if len(valid_idx) < 2:
+                return -1.0
+            diffs = np.diff(valid_idx)
+            if len(diffs) == 0:
+                return -1.0
+            max_gap_idx = int(np.argmax(diffs))
+            if diffs[max_gap_idx] > self.p3_align_min_gap_px:
+                l_edge = valid_idx[max_gap_idx]
+                r_edge = valid_idx[max_gap_idx + 1]
+                return 0.5 * (l_edge + r_edge)
+            return -1.0
+
+        cx_n = get_road_center(near_y)
+        cx_f = get_road_center(far_y)
+        self.p3_align_near_center = cx_n
+        self.p3_align_far_center = cx_f
+
+        if cx_n != -1 and cx_f != -1:
+            self.p3_s4_lat = (width / 2.0 - cx_n) / (width / 2.0)
+            self.p3_s4_yaw = (cx_n - cx_f) / (width / 2.0)
+            self.p3_s4_valid = 1.0
+        else:
+            self.p3_s4_lat = 0.0
+            self.p3_s4_yaw = 0.0
+            self.p3_s4_valid = 0.0
+
+        self.p3_latest_mask = mask
+        self.p3_latest_mask_mid = mask_mid
+        self.p3_latest_mask_near = mask_near
+
+    def p3_show_debug_window(self, frame: np.ndarray):
+        try:
+            vis = frame.copy()
+            height, width = vis.shape[:2]
+            crop_left = int(width * self.p3_crop_left_ratio)
+            crop_right = int(width * self.p3_crop_right_ratio)
+            mid_top = int(height * self.p3_mid_top_ratio)
+            mid_bottom = int(height * self.p3_mid_bottom_ratio)
+            near_top = int(height * self.p3_near_top_ratio)
+            near_y = int(height * self.p3_align_near_y_ratio)
+            far_y = int(height * self.p3_align_far_y_ratio)
+            roi_left = int(width * self.p3_align_roi_left_ratio)
+            roi_right = int(width * self.p3_align_roi_right_ratio)
+
+            cv2.putText(vis, f'P3 state={self.state}', (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+            cv2.putText(vis, f'err_mid={self.p3_error_mid:.3f} err_near={self.p3_error_near:.3f}', (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+            cv2.putText(vis, f's4_valid={self.p3_s4_valid:.1f} lat={self.p3_s4_lat:.3f} yaw={self.p3_s4_yaw:.3f}', (10, 79), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+
+            cv2.line(vis, (crop_left, 0), (crop_left, height), (0, 255, 255), 2)
+            cv2.line(vis, (crop_right, 0), (crop_right, height), (0, 255, 255), 2)
+            cv2.line(vis, (0, mid_top), (width, mid_top), (255, 0, 0), 2)
+            cv2.line(vis, (0, mid_bottom), (width, mid_bottom), (0, 255, 0), 2)
+            cv2.line(vis, (0, near_top), (width, near_top), (0, 180, 255), 1)
+
+            cv2.line(vis, (0, near_y), (width, near_y), (255, 255, 0), 1)
+            cv2.line(vis, (0, far_y), (width, far_y), (255, 255, 0), 1)
+            cv2.line(vis, (roi_left, 0), (roi_left, height), (255, 0, 255), 2)
+            cv2.line(vis, (roi_right, 0), (roi_right, height), (255, 0, 255), 2)
+
+            if self.p3_align_near_center != -1 and self.p3_align_far_center != -1:
+                cv2.line(
+                    vis,
+                    (int(self.p3_align_near_center), near_y),
+                    (int(self.p3_align_far_center), far_y),
+                    (0, 0, 255),
+                    3
+                )
+
+            cv2.imshow('part3_origin_debug', vis)
+            if self.p3_latest_mask_mid is not None:
+                cv2.imshow('part3_mask_mid', self.p3_latest_mask_mid)
+            if self.p3_latest_mask_near is not None:
+                cv2.imshow('part3_mask_near', self.p3_latest_mask_near)
+            cv2.waitKey(1)
+        except Exception as e:
+            self.get_logger().warn(f'p3_show_debug_window failed: {e}', throttle_duration_sec=1.0)
+
+    def p3_control_loop(self):
+        elapsed = self.p3_elapsed_in_state()
+        now = self.now_sec()
+
+        if self.state == 'P3_STAND_WAIT':
+            if not self.p3_stand_sent:
+                self.p3_send_stand_command()
+                self.p3_stand_sent = True
+                self.get_logger().info(
+                    f'P3_STAND_WAIT start: duration={self.p3_stand_wait_sec:.2f}s, '
+                    f'body_height={self.p3_stand_body_height:.2f}, pitch={self.p3_stand_pitch:.2f}'
+                )
+
+            if elapsed >= self.p3_stand_wait_sec:
+                self.set_state('P3_S_CURVE_CRUISE')
+                return
+            return
+
+        if self.state == 'P3_S_CURVE_CRUISE':
+            if elapsed >= self.p3_s_curve_duration_sec:
+                self.set_state('P3_ALIGN_TRACK')
+                return
+
+            if now - self.p3_last_update_time < self.p3_vision_timeout_sec:
+                err_mid = self.p3_error_mid
+                err_near = self.p3_error_near
+                raw_turn = (err_mid / 500.0 + err_near) * self.p3_kp_turn
+                turn_speed = clamp(raw_turn, -0.5, 0.5)
+                raw_lateral = err_near * self.p3_kp_lat
+                lateral_speed = clamp(raw_lateral, -0.10, 0.10)
+                speed_drop = abs(err_near) * self.p3_kd_slowdown
+                forward_speed = max(self.p3_min_forward_speed, self.p3_base_forward_speed - speed_drop)
+            else:
+                forward_speed = self.p3_fallback_forward_speed
+                lateral_speed = 0.0
+                turn_speed = 0.0
+
+            self.get_logger().info(
+                f'P3_S_CURVE_CRUISE elapsed={elapsed:.2f}/{self.p3_s_curve_duration_sec:.2f}s | '
+                f'err_mid={self.p3_error_mid:.3f}, err_near={self.p3_error_near:.3f}, '
+                f'cmd=[{forward_speed:.3f},{lateral_speed:.3f},{turn_speed:.3f}]',
+                throttle_duration_sec=0.5
+            )
+            self.p3_send_velocity_command(forward_speed, lateral_speed, turn_speed, step_height=self.p3_step_height)
+            return
+
+        if self.state == 'P3_ALIGN_TRACK':
+            if elapsed >= self.p3_align_max_duration_sec:
+                self.get_logger().info('P3_ALIGN_TRACK timeout, finish all stages.')
+                self.set_state('DONE')
+                return
+
+            if self.p3_s4_valid > 0.5:
+                err_lat = self.p3_s4_lat
+                err_yaw = self.p3_s4_yaw
+                if abs(err_lat) < self.p3_align_lat_tol and abs(err_yaw) < self.p3_align_yaw_tol:
+                    self.get_logger().info('P3_ALIGN_TRACK complete: centered and aligned.')
+                    self.set_state('DONE')
+                    return
+
+                lateral_speed = clamp(err_lat * self.p3_align_lat_gain, -self.p3_align_lat_max, self.p3_align_lat_max)
+                turn_speed = clamp(err_yaw * self.p3_align_yaw_gain, -self.p3_align_yaw_max, self.p3_align_yaw_max)
+                self.p3_send_velocity_command(0.0, lateral_speed, turn_speed, step_height=self.p3_align_step_height)
+            else:
+                self.p3_send_velocity_command(self.p3_align_search_vx, 0.0, self.p3_align_search_wz, step_height=self.p3_align_step_height)
+            return
+
+    # ============================================================
     # 主循环
     # ============================================================
     def control_loop(self):
+        # 第一赛段 P1_* 状态优先执行；结束时会直接 set_state 到第二赛段状态，不额外发 STOP。
+        if isinstance(self.state, str) and self.state.startswith('P1_'):
+            self.p1_control_loop()
+            return
+
+        if isinstance(self.state, str) and self.state.startswith('P3_'):
+            self.p3_control_loop()
+            return
+
         pose = self.get_current_pose()
 
         # TF 现在不是状态机运行的必要条件。
@@ -1794,7 +2611,8 @@ class MultiStageOrangeYellowTaskNode(Node):
             )
 
             if elapsed >= self.stage3_final_rotate_duration_sec:
-                self.set_state('DONE')
+                # 第二赛段结束后直接进入第三赛段入口；不先进入 DONE，避免提前全流程停止。
+                self.set_state('P3_S_CURVE_CRUISE')
                 return
 
             # 默认 wz > 0 为左转。
@@ -2010,7 +2828,7 @@ class MultiStageOrangeYellowTaskNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MultiStageOrangeYellowTaskNode()
+    node = CombinedStage1Stage2Node()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -2018,6 +2836,10 @@ def main(args=None):
     finally:
         node.get_logger().info('Shutting down, sending stop command...')
         node.send_stop_command()
+        try:
+            node.Ctrl.quit()
+        except Exception:
+            pass
         try:
             cv2.destroyAllWindows()
         except Exception:
