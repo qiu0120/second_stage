@@ -4970,7 +4970,7 @@ class CombinedStage1Stage2Node(Node):
 
         # 黄线预触发减速区：先减速，再真正触发切状态
         self.declare_parameter('yellow_slowdown_ratio_stage1', 0.90)
-        self.declare_parameter('yellow_slowdown_ratio_stage2', 0.62)
+        self.declare_parameter('yellow_slowdown_ratio_stage2', 0.67)
         self.declare_parameter('yellow_slowdown_ratio_stage3', 0.70)
         self.declare_parameter('yellow_slowdown_ratio_scan', 0.52)
         self.declare_parameter('yellow_slowdown_ratio_final', 0.80)
