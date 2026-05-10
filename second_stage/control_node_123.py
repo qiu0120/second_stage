@@ -61,7 +61,7 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('p1_stand_wait_sec', 0)
         self.declare_parameter('p1_stand_body_height', 0.28)
 
-        self.declare_parameter('p1_stage1_max_duration_sec', 8.0)
+        self.declare_parameter('p1_stage1_max_duration_sec', 9.0)
         self.declare_parameter('p1_base_forward_speed', 0.40)
         self.declare_parameter('p1_min_forward_speed', 0.20)
         self.declare_parameter('p1_kp_turn', 0.25)
@@ -79,10 +79,10 @@ class CombinedStage1Stage2Node(Node):
 
         self.declare_parameter('p1_turn_duration_sec', 3.5)
         self.declare_parameter('p1_turn_forward_vel', 0.13)
-        self.declare_parameter('p1_turn_yaw_vel', 0.50)
+        self.declare_parameter('p1_turn_yaw_vel', 0.51)
 
         self.declare_parameter('p1_blue_target_distance_m', 0.25)
-        self.declare_parameter('p1_approach_blue_max_duration_sec', 6.0)
+        self.declare_parameter('p1_approach_blue_max_duration_sec', 3.0)
         self.declare_parameter('p1_approach_blue_forward_speed', 0.20)
 
         self.declare_parameter('p1_blind_left_duration_sec', 3.0)
@@ -126,16 +126,16 @@ class CombinedStage1Stage2Node(Node):
         #   黄线达到第一阶段阈值时转入 STAGE1_ROTATE_LEFT_90。
         #
         # STAGE1_ROTATE_LEFT_90:
-        #   第一阶段结束后的左跳转向状态。
-        #   当前实现中执行一次原地左跳，完成后直接进入 STAGE2_CRUISE_YELLOW_ONLY。
+        #   第一阶段结束后的左转状态。
+        #   使用固定角速度 + 固定仿真时间代替原地左跳，完成后直接进入 STAGE2_CRUISE_YELLOW_ONLY。
         #
         # STAGE2_CRUISE_YELLOW_ONLY:
         #   第二阶段巡航；只看黄线，不处理橙球。
         #   黄线达到第二阶段阈值时转入 STAGE2_ROTATE_LEFT_90。
         #
         # STAGE2_ROTATE_LEFT_90:
-        #   第二阶段结束后的左跳转向状态。
-        #   当前实现中执行一次原地左跳，完成后先进入
+        #   第二阶段结束后的左转状态。
+        #   使用固定角速度 + 固定仿真时间代替原地左跳，完成后先进入
         #   STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME，按仿真时间前进固定时长，
         #   再进入 STAGE3_CRUISE_BALL_ONLY。
         #
@@ -150,7 +150,7 @@ class CombinedStage1Stage2Node(Node):
         #
         # STAGE3_ROTATE_BACK_180:
         #   第三阶段末尾回转状态。
-        #   当前实现中连续执行两次原地左跳，近似代替 180° 掉头，
+        #   使用固定角速度 + 固定仿真时间代替两次原地左跳，近似完成 180° 掉头，
         #   完成后进入 STAGE3_FINAL_DECISION。
         #
         # STAGE3_FINAL_DECISION:
@@ -244,14 +244,14 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('yellow_v_max', 255)
         self.declare_parameter('yellow_min_contour_area', 100.0)
 
-        self.declare_parameter('yellow_min_width_height_ratio', 2.0)
+        self.declare_parameter('yellow_min_width_height_ratio', 2.5)
         self.declare_parameter('yellow_max_tilt_deg', 30.0)
-        self.declare_parameter('yellow_center_tolerance_ratio', 0.28)
-        self.declare_parameter('yellow_min_width_ratio', 0.18)
+        self.declare_parameter('yellow_center_tolerance_ratio', 0.15)
+        self.declare_parameter('yellow_min_width_ratio', 0.45)
 
         self.declare_parameter('yellow_stop_line_y_ratio_stage1', 1.0)
-        self.declare_parameter('yellow_stop_line_y_ratio_stage2', 0.70)
-        self.declare_parameter('yellow_stop_line_y_ratio_stage3', 0.8)
+        self.declare_parameter('yellow_stop_line_y_ratio_stage2', 0.75)
+        self.declare_parameter('yellow_stop_line_y_ratio_stage3', 0.80)
         self.declare_parameter('yellow_stop_confirm_count', 1)
 
         self.declare_parameter('yellow_ratio_scan', 0.6)
@@ -340,6 +340,16 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('stage2_forward_after_left_jump_duration_sec', 0.3)
 
         # =========================
+        # 用固定角速度 + 固定仿真时间代替原地左跳转向
+        # =========================
+        # 实际值需要按仿真里机器狗的真实转角微调。
+        self.declare_parameter('timed_turn_wz_90', 0.60)
+        self.declare_parameter('timed_turn_duration_90_sec', 3.25)
+        self.declare_parameter('timed_turn_wz_180', 0.60)
+        self.declare_parameter('timed_turn_duration_180_sec', 6.4)
+        self.declare_parameter('timed_turn_step_height', 0.02)
+
+        # =========================
         # 第三赛段参数：S 弯巡航 + 出弯赛道对齐
         # 来自 part3_2.0.py / part3_vision.py，合并后不再使用 /vision 中间话题。
         # =========================
@@ -359,14 +369,14 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('p3_fallback_forward_speed', 0.10)
 
         self.declare_parameter('p3_align_max_duration_sec', 8.0)
-        self.declare_parameter('p3_align_lat_tol', 0.08)
-        self.declare_parameter('p3_align_yaw_tol', 0.08)
-        self.declare_parameter('p3_align_lat_gain', 0.4)
-        self.declare_parameter('p3_align_yaw_gain', 0.8)
+        self.declare_parameter('p3_align_lat_tol', 0.01)
+        self.declare_parameter('p3_align_yaw_tol', 0.010)
+        self.declare_parameter('p3_align_lat_gain', 0.5)
+        self.declare_parameter('p3_align_yaw_gain', 2.0)
         self.declare_parameter('p3_align_lat_max', 0.15)
         self.declare_parameter('p3_align_yaw_max', 0.30)
-        self.declare_parameter('p3_align_search_vx', 0.10)
-        self.declare_parameter('p3_align_search_wz', 0.10)
+        self.declare_parameter('p3_align_search_vx', 0.11)
+        self.declare_parameter('p3_align_search_wz', 0.13)
 
         self.declare_parameter('p3_yellow_h_min', 20)
         self.declare_parameter('p3_yellow_h_max', 40)
@@ -570,6 +580,12 @@ class CombinedStage1Stage2Node(Node):
         self.stage2_forward_after_left_jump_speed = float(self.get_parameter('stage2_forward_after_left_jump_speed').value)
         self.stage2_forward_after_left_jump_duration_sec = float(self.get_parameter('stage2_forward_after_left_jump_duration_sec').value)
 
+        self.timed_turn_wz_90 = float(self.get_parameter('timed_turn_wz_90').value)
+        self.timed_turn_duration_90_sec = float(self.get_parameter('timed_turn_duration_90_sec').value)
+        self.timed_turn_wz_180 = float(self.get_parameter('timed_turn_wz_180').value)
+        self.timed_turn_duration_180_sec = float(self.get_parameter('timed_turn_duration_180_sec').value)
+        self.timed_turn_step_height = float(self.get_parameter('timed_turn_step_height').value)
+
         self.p3_stand_wait_sec = float(self.get_parameter('p3_stand_wait_sec').value)
         self.p3_stand_body_height = float(self.get_parameter('p3_stand_body_height').value)
         self.p3_stand_pitch = float(self.get_parameter('p3_stand_pitch').value)
@@ -722,6 +738,7 @@ class CombinedStage1Stage2Node(Node):
         self.stage2_forward_after_left_jump_start_time_sec: Optional[float] = None
         self.stage3_final_left_shift_start_time_sec: Optional[float] = None
         self.stage3_final_rotate_start_time_sec: Optional[float] = None
+        self.timed_turn_start_time_sec: Optional[float] = None
 
         self.lateral_align_counter = 0
 
@@ -935,7 +952,7 @@ class CombinedStage1Stage2Node(Node):
                 self.get_logger().info('[P1] 开始根据横线角度调平')
                 self.set_state('P1_ALIGN_STOP_LINE')
                 return
-            self.send_velocity_command(0.0, 0.0, 0.0, step_height=0.13)
+            self.send_velocity_command(0.0, 0.0, 0.0, step_height=0.10)
             return
 
         if self.state == 'P1_ALIGN_STOP_LINE':
@@ -951,7 +968,7 @@ class CombinedStage1Stage2Node(Node):
                 return
 
             turn_speed = clamp(angle_err * self.p1_align_turn_kp, -self.p1_align_turn_max_wz, self.p1_align_turn_max_wz)
-            self.send_velocity_command(0.0, 0.0, turn_speed, step_height=0.13)
+            self.send_velocity_command(0.0, 0.0, turn_speed, step_height=0.10)
             return
 
         if self.state == 'P1_TURN_LEFT_TO_STAGE2':
@@ -959,7 +976,7 @@ class CombinedStage1Stage2Node(Node):
                 self.get_logger().info('[P1] 左转结束，开始寻找蓝球并前进')
                 self.set_state('P1_APPROACH_BLUE_BALL')
                 return
-            self.send_velocity_command(self.p1_turn_forward_vel, 0.0, self.p1_turn_yaw_vel, step_height=0.13)
+            self.send_velocity_command(self.p1_turn_forward_vel, 0.0, self.p1_turn_yaw_vel, step_height=0.10)
             return
 
         if self.state == 'P1_APPROACH_BLUE_BALL':
@@ -1022,6 +1039,7 @@ class CombinedStage1Stage2Node(Node):
         self.stage2_forward_after_left_jump_start_time_sec = None
         self.stage3_final_left_shift_start_time_sec = None
         self.stage3_final_rotate_start_time_sec = None
+        self.timed_turn_start_time_sec = None
 
         # 防重复撞球缓存：进入第二赛段时清空，避免第一赛段运动时间影响第二赛段第一次触发。
         self.last_ball_done_time_sec = None
@@ -1109,6 +1127,37 @@ class CombinedStage1Stage2Node(Node):
         for _ in range(jump_count):
             self.send_left_jump_action_once()
         self.set_state(next_state)
+
+    def execute_timed_turn(self, wz: float, duration_sec: float, next_state: str) -> bool:
+        """
+        用固定角速度 + 固定仿真时间转向，代替原来的原地左跳。
+        不发送 STOP，转完后直接切换到 next_state。
+        """
+        now = self.now_sec()
+
+        if self.timed_turn_start_time_sec is None:
+            self.timed_turn_start_time_sec = now
+            self.get_logger().info(
+                f'[TIMED_TURN] start: wz={wz:.3f}, duration={duration_sec:.2f}s, next={next_state}'
+            )
+
+        elapsed = now - self.timed_turn_start_time_sec
+
+        if elapsed >= duration_sec:
+            self.get_logger().info(
+                f'[TIMED_TURN] done: elapsed={elapsed:.2f}s, next={next_state}'
+            )
+            self.timed_turn_start_time_sec = None
+            self.set_state(next_state)
+            return True
+
+        self.send_velocity_command(
+            0.0,
+            0.0,
+            wz,
+            step_height=self.timed_turn_step_height
+        )
+        return True
 
     def now_sec(self) -> float:
         return self.get_clock().now().nanoseconds / 1e9
@@ -1398,6 +1447,17 @@ class CombinedStage1Stage2Node(Node):
     # 黄线检测
     # ============================================================
     def is_front_horizontal_yellow_line(self, cnt, roi_shape) -> bool:
+        """
+        判断黄色轮廓是否为前方横向停止线。
+
+        改进版：不再使用 minAreaRect / fitLine 的角度作为过滤条件，
+        避免同一条横线在 0° 和 90° 之间跳变导致误拒绝。
+
+        只使用更严格的 bbox 条件：
+        1. wh_ratio = bbox_width / bbox_height 足够大，必须像横向长条；
+        2. width_ratio = bbox_width / roi_width 足够大，必须横跨较大前方区域；
+        3. center_offset_ratio 足够小，必须靠近 ROI 中心，避免旁边黄线误判。
+        """
         _, roi_w = roi_shape[:2]
 
         area = cv2.contourArea(cnt)
@@ -1420,20 +1480,6 @@ class CombinedStage1Stage2Node(Node):
         roi_cx = roi_w / 2.0
         center_offset_ratio = abs(cx - roi_cx) / float(max(roi_w, 1))
         if center_offset_ratio > self.yellow_center_tolerance_ratio:
-            return False
-
-        rect = cv2.minAreaRect(cnt)
-        (_, _), (rw, rh), angle = rect
-
-        if rw < rh:
-            tilt_deg = abs(angle - 90.0)
-        else:
-            tilt_deg = abs(angle)
-
-        if tilt_deg > 45.0:
-            tilt_deg = abs(90.0 - tilt_deg)
-
-        if tilt_deg > self.yellow_max_tilt_deg:
             return False
 
         return True
@@ -1567,6 +1613,13 @@ class CombinedStage1Stage2Node(Node):
             if new_state == 'STAGE1_CRUISE_BALL_AND_YELLOW':
                 self.stage1_yellow_touched_bottom = False
                 self.stage1_yellow_disappear_counter = 0
+
+            if new_state in (
+                'STAGE1_ROTATE_LEFT_90',
+                'STAGE2_ROTATE_LEFT_90',
+                'STAGE3_ROTATE_BACK_180',
+            ):
+                self.timed_turn_start_time_sec = None
 
             if new_state == 'STAGE3_ROTATE_LEFT_30':
                 self.stage3_final_left_shift_start_time_sec = None
@@ -2467,10 +2520,11 @@ class CombinedStage1Stage2Node(Node):
                 self.get_logger().info('P3_ALIGN_TRACK timeout, finish all stages.')
                 self.set_state('DONE')
                 return
-
+            
             if self.p3_s4_valid > 0.5:
                 err_lat = self.p3_s4_lat
                 err_yaw = self.p3_s4_yaw
+
                 if abs(err_lat) < self.p3_align_lat_tol and abs(err_yaw) < self.p3_align_yaw_tol:
                     self.get_logger().info('P3_ALIGN_TRACK complete: centered and aligned.')
                     self.set_state('DONE')
@@ -2538,22 +2592,25 @@ class CombinedStage1Stage2Node(Node):
             return
 
         if self.state == 'STAGE1_ROTATE_LEFT_90':
-            self.execute_left_jump_turn(
-                jump_count=1,
+            self.execute_timed_turn(
+                wz=self.timed_turn_wz_90,
+                duration_sec=self.timed_turn_duration_90_sec,
                 next_state='STAGE2_CRUISE_YELLOW_ONLY'
             )
             return
 
         if self.state == 'STAGE2_ROTATE_LEFT_90':
-            self.execute_left_jump_turn(
-                jump_count=1,
+            self.execute_timed_turn(
+                wz=self.timed_turn_wz_90,
+                duration_sec=self.timed_turn_duration_90_sec,
                 next_state='STAGE2_MOVE_FORWARD_AFTER_LEFT_JUMP_TIME'
             )
             return
 
         if self.state == 'STAGE3_ROTATE_BACK_180':
-            self.execute_left_jump_turn(
-                jump_count=2,
+            self.execute_timed_turn(
+                wz=self.timed_turn_wz_180,
+                duration_sec=self.timed_turn_duration_180_sec,
                 next_state='STAGE3_FINAL_DECISION'
             )
             return
