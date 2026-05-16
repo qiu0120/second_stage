@@ -34,10 +34,12 @@ from cyberdog_msg.msg import YamlParam, ApplyForce
 def clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
+
 def quat_to_yaw(x: float, y: float, z: float, w: float) -> float:
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     return math.atan2(siny_cosp, cosy_cosp)
+
 
 @dataclass
 class Detection:
@@ -47,17 +49,20 @@ class Detection:
     score: float
     extra: Dict[str, Any]
 
+
 class ControlParameterValueKind:
     kDOUBLE = 1
     kS64 = 2
     kVEC_X_DOUBLE = 3
     kMAT_X_DOUBLE = 4
 
+
 class VoicePlayer:
     """
     比赛语音播报：提前准备 wav 文件，识别到对应目标时异步 aplay 播放。
     重点：播放在单独线程里执行，不阻塞 ROS2 状态机和速度控制循环。
     """
+
     def __init__(self, voice_dir: str = '/home/cyberdog_sim/voice', enabled: bool = True):
         self.voice_dir = voice_dir
         self.enabled = bool(enabled)
@@ -65,11 +70,11 @@ class VoicePlayer:
         self.playing = False
 
         self.voice_files = {
-            'bar': 'bar.wav',                  # 识别到限高杆
-            'obstacle': 'obstacle.wav',        # 识别到无法跨越障碍
-            'cola': 'cola.wav',                # 识别到可乐瓶
+            'bar': 'bar.wav',  # 识别到限高杆
+            'obstacle': 'obstacle.wav',  # 识别到无法跨越障碍
+            'cola': 'cola.wav',  # 识别到可乐瓶
             'orange_ball': 'orange_ball.wav',  # 识别到橙色小球
-            'football': 'football.wav',        # 识别到足球
+            'football': 'football.wav',  # 识别到足球
             # 兼容当前代码里的检测类型命名
             'blue_ball': 'orange_ball.wav',
             'white_ball': 'football.wav',
@@ -103,6 +108,7 @@ class VoicePlayer:
         Thread(target=_run, daemon=True).start()
         return True
 
+
 class BaseDetector:
     def __init__(self, cfg: Dict[str, Any]):
         self.roi_x_ratio_min = cfg['roi_x_ratio_min']
@@ -117,6 +123,7 @@ class BaseDetector:
         y1 = int(h * self.roi_y_ratio_min)
         y2 = int(h * self.roi_y_ratio_max)
         return (x1, y1, x2, y2), frame_bgr[y1:y2, x1:x2].copy()
+
 
 class BarColorDetector(BaseDetector):
     def __init__(self, cfg: Dict[str, Any]):
@@ -198,6 +205,7 @@ class BarColorDetector(BaseDetector):
             'abs_tilt_deg': float(abs(angle_deg)),
         })
 
+
 class BallDetector(BaseDetector):
     def __init__(self, cfg: Dict[str, Any], det_type: str):
         super().__init__(cfg)
@@ -250,7 +258,8 @@ class BallDetector(BaseDetector):
                 continue
             if center_y_ratio > self.max_center_y_ratio_in_roi:
                 continue
-            score = (radius * self.radius_score_gain) * max(circularity, 0.0) * (self.center_weight_base + self.center_weight_gain * center_bonus)
+            score = (radius * self.radius_score_gain) * max(circularity, 0.0) * (
+                        self.center_weight_base + self.center_weight_gain * center_bonus)
             candidates.append((score, x, y, bw, bh, cx, cy, radius, circularity))
         if not candidates:
             return None
@@ -263,6 +272,7 @@ class BallDetector(BaseDetector):
             'radius': float(radius),
             'circularity': float(circularity),
         })
+
 
 class ColaDetector(BaseDetector):
     def __init__(self, cfg: Dict[str, Any]):
@@ -323,6 +333,7 @@ class ColaDetector(BaseDetector):
         cx = bx1 + bw // 2
         cy = by1 + bh // 2
         return Detection('cola', (cx, cy), (bx1, by1, bx2, by2), float(score), {'hw_ratio': float(hw_ratio)})
+
 
 class ObstacleBlueDepthDetector:
     def __init__(self, cfg: Dict[str, Any]):
@@ -433,9 +444,9 @@ class ObstacleBlueDepthDetector:
             depth_patch = roi_depth_m[ry:ry + rh, rx:rx + rw]
             valid_mask = np.isfinite(depth_patch) & (depth_patch > 0.0)
             near_mask = (
-                valid_mask
-                & (depth_patch >= self.depth_min_m)
-                & (depth_patch <= self.depth_max_m)
+                    valid_mask
+                    & (depth_patch >= self.depth_min_m)
+                    & (depth_patch <= self.depth_max_m)
             )
 
             total_pixels = max(rw * rh, 1)
@@ -532,6 +543,7 @@ class ObstacleBlueDepthDetector:
             'frame_vis': frame_vis,
             'mask': mask,
         }
+
 
 class YellowDashedLineDetector:
     def __init__(self, cfg: Dict[str, Any]):
@@ -704,11 +716,11 @@ class YellowDashedLineDetector:
         bottom_ratio = max_y / float(max(roi_h, 1))
 
         score = (
-            300.0 * len(group)
-            + 2.0 * total_span_y
-            + 100.0 * bottom_ratio
-            + 0.01 * total_area
-            - 0.5 * total_x_range
+                300.0 * len(group)
+                + 2.0 * total_span_y
+                + 100.0 * bottom_ratio
+                + 0.01 * total_area
+                - 0.5 * total_x_range
         )
 
         return Detection(
@@ -821,6 +833,7 @@ class YellowDashedLineDetector:
     def detect_top_dashed_lines(self, frame_bgr) -> List[Detection]:
         dashed = self.detect_dashed_lines(frame_bgr)
         return dashed[:self.max_dashed_lines]
+
 
 class YellowHorizontalLineDetector:
     def __init__(self, cfg: Dict[str, Any]):
@@ -960,6 +973,7 @@ class YellowHorizontalLineDetector:
 
         return max(candidates, key=lambda d: d.score)
 
+
 class FourthStageMixin:
     # ============================================================
     # 全局总调度状态：启动预左移 -> 横向搜索 -> 居中 -> 子流程 -> 完成后左移
@@ -1028,6 +1042,10 @@ class FourthStageMixin:
     GLOBAL_FINAL_YELLOW_FORWARD = 'GLOBAL_FINAL_YELLOW_FORWARD'
     GLOBAL_FINAL_LEFT_JUMP = 'GLOBAL_FINAL_LEFT_JUMP'
 
+    # 第四赛段结束后的最终视觉矫正：复用第三赛段结束时的 P3_ALIGN_TRACK 逻辑。
+    # 位置与第三赛段结束位置一致，所以同样用 p3_process_yellow_track 得到 p3_s4_lat / p3_s4_yaw。
+    GLOBAL_FINAL_P3_ALIGN = 'GLOBAL_FINAL_P3_ALIGN'
+
     DONE = 'DONE'
 
     def fourth_stage_init(self):
@@ -1037,7 +1055,7 @@ class FourthStageMixin:
         self.declare_parameter('voice_enabled', True)
         self.declare_parameter('voice_dir', '/home/cyberdog_sim/voice')
 
-                # ============================================================
+        # ============================================================
         # 调试用：指定程序启动后的初始状态
         # 默认从 GLOBAL_INITIAL_LATERAL_SHIFT 开始完整第四赛段流程。
         #
@@ -1385,10 +1403,10 @@ class FourthStageMixin:
         self.declare_parameter('dashed_align_vy_max', 0.30)
         self.declare_parameter('dashed_align_vy_min', 0.20)
         self.declare_parameter('dashed_center_px_deadband', 7)
-        self.declare_parameter('dashed_center_stable_frames', 3)
+        self.declare_parameter('dashed_center_stable_frames', 1)
 
         # 黄线开始对齐前，先朝虚线所在方向横移一小段仿真时间。
-        self.declare_parameter('dashed_pre_shift_speed', 0.25)
+        self.declare_parameter('dashed_pre_shift_speed', 0.2)
         self.declare_parameter('dashed_pre_shift_duration_s', 1.0)
 
         # 偏置对齐目标，单位：像素
@@ -1399,10 +1417,9 @@ class FourthStageMixin:
         self.declare_parameter('follow_forward_speed', 0.50)
         self.declare_parameter('follow_align_vy_k', 0.18)
         # FOLLOW_DASHED_UNTIL_LOST 阶段单独使用的横向速度上下限，
-        # 不再和 ALIGN_DASHED_LINE 共用 dashed_align_vy_min / dashed_align_vy_max。
         self.declare_parameter('follow_align_vy_max', 0.15)
         self.declare_parameter('follow_align_vy_min', 0.05)
-        self.declare_parameter('dashed_lost_stop_frames', 2)
+        self.declare_parameter('dashed_lost_stop_frames', 3)
 
         # =========================
         # 虚线消失后的后续任务参数
@@ -1411,7 +1428,7 @@ class FourthStageMixin:
         self.declare_parameter('tf_child_frame', 'base_link')
 
         # 虚线识别不到后，继续向前走一小段仿真时间
-        self.declare_parameter('post_dash_forward_duration_s', 1.0)
+        self.declare_parameter('post_dash_forward_duration_s', 0.8)
         self.declare_parameter('post_dash_forward_speed', 0.20)
 
         # 第一次转向持续时间。左边虚线 -> 右转；右边虚线 -> 左转
@@ -1559,17 +1576,21 @@ class FourthStageMixin:
 
         self.required_bar_count = int(self.get_parameter('required_bar_count').value)
         self.required_obstacle_count = int(self.get_parameter('required_obstacle_count').value)
-        self.global_initial_lateral_shift_duration_s = float(self.get_parameter('global_initial_lateral_shift_duration_s').value)
+        self.global_initial_lateral_shift_duration_s = float(
+            self.get_parameter('global_initial_lateral_shift_duration_s').value)
         self.global_initial_lateral_shift_vy = float(self.get_parameter('global_initial_lateral_shift_vy').value)
         self.global_lateral_search_vy = float(self.get_parameter('global_lateral_search_vy').value)
         self.global_center_stable_frames = int(self.get_parameter('global_center_stable_frames').value)
         self.global_after_task_shift_vy = float(self.get_parameter('global_after_task_shift_vy').value)
         self.global_after_task_shift_duration_s = float(self.get_parameter('global_after_task_shift_duration_s').value)
-        self.global_after_obstacle_shift_duration_left_dash_s = float(self.get_parameter('global_after_obstacle_shift_duration_left_dash_s').value)
-        self.global_after_obstacle_shift_duration_right_dash_s = float(self.get_parameter('global_after_obstacle_shift_duration_right_dash_s').value)
+        self.global_after_obstacle_shift_duration_left_dash_s = float(
+            self.get_parameter('global_after_obstacle_shift_duration_left_dash_s').value)
+        self.global_after_obstacle_shift_duration_right_dash_s = float(
+            self.get_parameter('global_after_obstacle_shift_duration_right_dash_s').value)
         self.search_left_half_after_bar_done = bool(self.get_parameter('search_left_half_after_bar_done').value)
         self.after_bar_search_x_ratio_max = float(self.get_parameter('after_bar_search_x_ratio_max').value)
-        self.search_left_half_after_obstacle_done = bool(self.get_parameter('search_left_half_after_obstacle_done').value)
+        self.search_left_half_after_obstacle_done = bool(
+            self.get_parameter('search_left_half_after_obstacle_done').value)
         self.after_obstacle_search_x_ratio_max = float(self.get_parameter('after_obstacle_search_x_ratio_max').value)
 
         self.bar_search_forward_speed = float(self.get_parameter('bar_search_forward_speed').value)
@@ -1599,7 +1620,8 @@ class FourthStageMixin:
         self.bar_backoff_depth_vx_k = abs(float(self.get_parameter('bar_backoff_depth_vx_k').value))
         self.bar_backoff_depth_vx_max = abs(float(self.get_parameter('bar_backoff_depth_vx_max').value))
         self.bar_backoff_depth_vx_min = abs(float(self.get_parameter('bar_backoff_depth_vx_min').value))
-        self.bar_backoff_allow_forward_correction = bool(self.get_parameter('bar_backoff_allow_forward_correction').value)
+        self.bar_backoff_allow_forward_correction = bool(
+            self.get_parameter('bar_backoff_allow_forward_correction').value)
 
         self.obstacle_forward_speed = float(self.get_parameter('obstacle_forward_speed').value)
         self.obstacle_search_forward_speed = float(self.get_parameter('obstacle_search_forward_speed').value)
@@ -1634,17 +1656,18 @@ class FourthStageMixin:
 
         self.post_dash_turn_duration_s = float(self.get_parameter('post_dash_turn_duration_s').value)
         self.post_dash_turn_wz = float(self.get_parameter('post_dash_turn_wz').value)
-        self.post_dash_turn_tolerance_rad = math.radians(float(self.get_parameter('post_dash_turn_tolerance_deg').value))
+        self.post_dash_turn_tolerance_rad = math.radians(
+            float(self.get_parameter('post_dash_turn_tolerance_deg').value))
 
         self.post_turn_forward_duration_s = float(self.get_parameter('post_turn_forward_duration_s').value)
         self.post_turn_forward_fast_duration_s = float(self.get_parameter('post_turn_forward_fast_duration_s').value)
         self.post_turn_forward_fast_speed = float(self.get_parameter('post_turn_forward_fast_speed').value)
         self.post_turn_forward_slow_speed = float(self.get_parameter('post_turn_forward_slow_speed').value)
 
-
         self.post_second_turn_duration_s = float(self.get_parameter('post_second_turn_duration_s').value)
         self.post_second_turn_wz = float(self.get_parameter('post_second_turn_wz').value)
-        self.post_second_turn_tolerance_rad = math.radians(float(self.get_parameter('post_second_turn_tolerance_deg').value))
+        self.post_second_turn_tolerance_rad = math.radians(
+            float(self.get_parameter('post_second_turn_tolerance_deg').value))
 
         self.target_search_forward_speed = float(self.get_parameter('target_search_forward_speed').value)
         self.align_forward_speed_far = float(self.get_parameter('align_forward_speed_far').value)
@@ -1667,16 +1690,20 @@ class FourthStageMixin:
         self.p4_timed_turn_duration_180_s = float(self.get_parameter('p4_timed_turn_duration_180_s').value)
 
         self.post_hit_obstacle_forward_speed = float(self.get_parameter('post_hit_obstacle_forward_speed').value)
-        self.post_hit_obstacle_search_forward_speed = float(self.get_parameter('post_hit_obstacle_search_forward_speed').value)
-        self.post_hit_obstacle_trigger_distance_m = float(self.get_parameter('post_hit_obstacle_trigger_distance_m').value)
+        self.post_hit_obstacle_search_forward_speed = float(
+            self.get_parameter('post_hit_obstacle_search_forward_speed').value)
+        self.post_hit_obstacle_trigger_distance_m = float(
+            self.get_parameter('post_hit_obstacle_trigger_distance_m').value)
         self.post_hit_obstacle_align_vy_k = float(self.get_parameter('post_hit_obstacle_align_vy_k').value)
         self.post_hit_obstacle_align_vy_max = float(self.get_parameter('post_hit_obstacle_align_vy_max').value)
         self.post_hit_obstacle_align_vy_min = float(self.get_parameter('post_hit_obstacle_align_vy_min').value)
-        self.post_hit_obstacle_center_px_deadband = int(self.get_parameter('post_hit_obstacle_center_px_deadband').value)
+        self.post_hit_obstacle_center_px_deadband = int(
+            self.get_parameter('post_hit_obstacle_center_px_deadband').value)
 
         self.post_hit_obs_turn_duration_s = float(self.get_parameter('post_hit_obs_turn_duration_s').value)
         self.post_hit_obs_turn_wz = float(self.get_parameter('post_hit_obs_turn_wz').value)
-        self.post_hit_obs_turn_tolerance_rad = math.radians(float(self.get_parameter('post_hit_obs_turn_tolerance_deg').value))
+        self.post_hit_obs_turn_tolerance_rad = math.radians(
+            float(self.get_parameter('post_hit_obs_turn_tolerance_deg').value))
         self.post_hit_obs_forward_duration_s = float(self.get_parameter('post_hit_obs_forward_duration_s').value)
         self.post_hit_obs_forward_speed = float(self.get_parameter('post_hit_obs_forward_speed').value)
         self.post_hit_final_forward_duration_s = float(self.get_parameter('post_hit_final_forward_duration_s').value)
@@ -1692,12 +1719,15 @@ class FourthStageMixin:
         self.final_yellow_tilt_deadband_deg = float(self.get_parameter('final_yellow_tilt_deadband_deg').value)
         self.final_yellow_done_tilt_deg = float(self.get_parameter('final_yellow_done_tilt_deg').value)
         self.final_yellow_confirm_count = int(self.get_parameter('final_yellow_confirm_count').value)
-        self.final_yellow_disappear_confirm_count = int(self.get_parameter('final_yellow_disappear_confirm_count').value)
+        self.final_yellow_disappear_confirm_count = int(
+            self.get_parameter('final_yellow_disappear_confirm_count').value)
 
         self.global_final_yellow_forward_speed = float(self.get_parameter('global_final_yellow_forward_speed').value)
-        self.global_final_yellow_stop_line_y_ratio = float(self.get_parameter('global_final_yellow_stop_line_y_ratio').value)
+        self.global_final_yellow_stop_line_y_ratio = float(
+            self.get_parameter('global_final_yellow_stop_line_y_ratio').value)
         self.global_final_yellow_confirm_count = int(self.get_parameter('global_final_yellow_confirm_count').value)
-        self.global_final_yellow_disappear_confirm_count = int(self.get_parameter('global_final_yellow_disappear_confirm_count').value)
+        self.global_final_yellow_disappear_confirm_count = int(
+            self.get_parameter('global_final_yellow_disappear_confirm_count').value)
 
         self.hit_params = {
             'blue_ball': {
@@ -1728,8 +1758,6 @@ class FourthStageMixin:
         self.voice = VoicePlayer(self.voice_dir, enabled=self.voice_enabled)
         self.voice_events_spoken = set()
 
-
-
         self.motion_cmd = (0.0, 0.0, 0.0)
         self.body_height_cmd = 0.25
 
@@ -1744,7 +1772,7 @@ class FourthStageMixin:
 
         # 第一次看到虚线时，记录它在图像左边还是右边。
         # 后续预横移和偏置对齐都会使用这个方向，不在 ALIGN 状态里清空。
-        self.dashed_side = None          # None / 'left' / 'right'
+        self.dashed_side = None  # None / 'left' / 'right'
         # DASH_PRE_SIDE_SHIFT 不再按时间结束，而是记录 TF 起点，按横向位移结束。
         self.dashed_pre_shift_start_pose = None
         self.dashed_pre_shift_dir_sign = 0.0
@@ -1753,7 +1781,7 @@ class FourthStageMixin:
         self.post_forward_start_pose = None
         self.post_turn_forward_start_pose = None
         self.turn_start_yaw = None
-        self.current_turn_dir = 0       # +1 左转，-1 右转
+        self.current_turn_dir = 0  # +1 左转，-1 右转
         self.current_turn_angle_rad = 0.0
         self.current_turn_tolerance_rad = 0.0
         self.current_turn_wz = 0.0
@@ -1768,7 +1796,7 @@ class FourthStageMixin:
         # 撞击完成后的后退 / 左跳 / 障碍物选择对齐使用
         self.after_hit_backoff_start_pose = None
         self.selected_obstacle_after_hit: Optional[Detection] = None
-        self.selected_obstacle_after_hit_side = None   # 'left' / 'right'
+        self.selected_obstacle_after_hit_side = None  # 'left' / 'right'
         self.post_hit_obs_forward_start_pose = None
         self.post_hit_pre_final_forward_start_pose = None
         self.post_hit_final_forward_start_pose = None  # 保留旧变量名，避免外部引用出错
@@ -1826,13 +1854,19 @@ class FourthStageMixin:
     # ---------- 全局整合 / 限高杆辅助 ----------
     def _declare_bar_params(self):
         p = self.declare_parameter
-        p('bar.h_min', 85); p('bar.h_max', 100)
-        p('bar.s_min', 15); p('bar.s_max', 45)
-        p('bar.v_min', 35); p('bar.v_max', 80)
-        p('bar.roi_x_ratio_min', 0.20); p('bar.roi_x_ratio_max', 0.80)
-        p('bar.roi_y_ratio_min', 0.10); p('bar.roi_y_ratio_max', 0.90)
+        p('bar.h_min', 85);
+        p('bar.h_max', 100)
+        p('bar.s_min', 15);
+        p('bar.s_max', 45)
+        p('bar.v_min', 35);
+        p('bar.v_max', 80)
+        p('bar.roi_x_ratio_min', 0.20);
+        p('bar.roi_x_ratio_max', 0.80)
+        p('bar.roi_y_ratio_min', 0.10);
+        p('bar.roi_y_ratio_max', 0.90)
         p('bar.open_kernel', 3)
-        p('bar.close_kernel_h', 7); p('bar.close_kernel_w', 11)
+        p('bar.close_kernel_h', 7);
+        p('bar.close_kernel_w', 11)
         p('bar.min_area', 300)
         p('bar.min_width', 15)
         p('bar.max_height', 1000)
@@ -1867,8 +1901,8 @@ class FourthStageMixin:
 
     def all_global_tasks_done(self) -> bool:
         return (
-            self.completed_bar_count >= self.required_bar_count
-            and self.completed_obstacle_count >= self.required_obstacle_count
+                self.completed_bar_count >= self.required_bar_count
+                and self.completed_obstacle_count >= self.required_obstacle_count
         )
 
     def enter_global_final_sequence(self):
@@ -2108,12 +2142,18 @@ class FourthStageMixin:
         sx2 = x2 - int(0.15 * bw)
         sy1 = y1 + int(0.05 * bh)
         sy2 = y1 + int(0.15 * bh)
-        sx1 = max(0, min(iw - 1, sx1)); sx2 = max(sx1 + 1, min(iw, sx2))
-        sy1 = max(0, min(ih - 1, sy1)); sy2 = max(sy1 + 1, min(ih, sy2))
-        dx1 = int(sx1 * dw / max(iw, 1)); dx2 = int(sx2 * dw / max(iw, 1))
-        dy1 = int(sy1 * dh / max(ih, 1)); dy2 = int(sy2 * dh / max(ih, 1))
-        dx1 = max(0, min(dw - 1, dx1)); dx2 = max(dx1 + 1, min(dw, dx2))
-        dy1 = max(0, min(dh - 1, dy1)); dy2 = max(dy1 + 1, min(dh, dy2))
+        sx1 = max(0, min(iw - 1, sx1));
+        sx2 = max(sx1 + 1, min(iw, sx2))
+        sy1 = max(0, min(ih - 1, sy1));
+        sy2 = max(sy1 + 1, min(ih, sy2))
+        dx1 = int(sx1 * dw / max(iw, 1));
+        dx2 = int(sx2 * dw / max(iw, 1))
+        dy1 = int(sy1 * dh / max(ih, 1));
+        dy2 = int(sy2 * dh / max(ih, 1))
+        dx1 = max(0, min(dw - 1, dx1));
+        dx2 = max(dx1 + 1, min(dw, dx2))
+        dy1 = max(0, min(dh - 1, dy1));
+        dy2 = max(dy1 + 1, min(dh, dy2))
         patch = depth_m[dy1:dy2, dx1:dx2]
         valid = patch[np.isfinite(patch)]
         valid = valid[(valid > 0.05) & (valid < 10.0)]
@@ -2449,7 +2489,6 @@ class FourthStageMixin:
             'max_dashed_lines': int(gp('yellow.max_dashed_lines').value),
         }
 
-
     def _declare_final_yellow_params(self):
         p = self.declare_parameter
 
@@ -2509,7 +2548,6 @@ class FourthStageMixin:
             'center_tolerance_ratio': float(gp('final_yellow.center_tolerance_ratio').value),
         }
 
-
     # ---------- 第二次转向后的目标检测参数 ----------
     def _declare_ball_params(self, prefix: str, defaults: Dict[str, Any]):
         for k, v in defaults.items():
@@ -2536,18 +2574,29 @@ class FourthStageMixin:
 
     def _declare_cola_params(self):
         p = self.declare_parameter
-        p('cola.h_min', 0); p('cola.h_max', 20)
-        p('cola.s_min', 0); p('cola.s_max', 20)
-        p('cola.v_min', 0); p('cola.v_max', 20)
-        p('cola.roi_x_ratio_min', 0.20); p('cola.roi_x_ratio_max', 0.80)
-        p('cola.roi_y_ratio_min', 0.00); p('cola.roi_y_ratio_max', 1.00)
-        p('cola.open_kernel', 3); p('cola.close_kernel', 5)
-        p('cola.min_area', 250); p('cola.max_area', 80000)
-        p('cola.min_width', 8); p('cola.max_width', 5000)
-        p('cola.min_height', 20); p('cola.max_height', 10000)
-        p('cola.min_hw_ratio', 1.5); p('cola.max_hw_ratio', 20.0)
+        p('cola.h_min', 0);
+        p('cola.h_max', 20)
+        p('cola.s_min', 0);
+        p('cola.s_max', 20)
+        p('cola.v_min', 0);
+        p('cola.v_max', 20)
+        p('cola.roi_x_ratio_min', 0.20);
+        p('cola.roi_x_ratio_max', 0.80)
+        p('cola.roi_y_ratio_min', 0.00);
+        p('cola.roi_y_ratio_max', 1.00)
+        p('cola.open_kernel', 3);
+        p('cola.close_kernel', 5)
+        p('cola.min_area', 250);
+        p('cola.max_area', 80000)
+        p('cola.min_width', 8);
+        p('cola.max_width', 5000)
+        p('cola.min_height', 20);
+        p('cola.max_height', 10000)
+        p('cola.min_hw_ratio', 1.5);
+        p('cola.max_hw_ratio', 20.0)
         p('cola.max_center_y_ratio_in_roi', 1.0)
-        p('cola.center_weight_base', 0.3); p('cola.center_weight_gain', 0.7)
+        p('cola.center_weight_base', 0.3);
+        p('cola.center_weight_gain', 0.7)
 
     def _read_cola_cfg(self):
         gp = self.get_parameter
@@ -2616,7 +2665,6 @@ class FourthStageMixin:
         except Exception as e:
             self.get_logger().error(f'DEPTH convert failed: {e}')
 
-
     def depth_to_meters(self, depth_img):
         if depth_img is None:
             return None
@@ -2674,7 +2722,7 @@ class FourthStageMixin:
         self.body_height_cmd = 0.17
 
         values = [0.0] * 12
-        values[0] = 0.0   # roll
+        values[0] = 0.0  # roll
         values[2] = 0.17  # height
 
         self.yaml_node.publish_yaml_vecxd(
@@ -2698,7 +2746,7 @@ class FourthStageMixin:
         self.body_height_cmd = 0.25
 
         values = [0.0] * 12
-        values[0] = 0.0   # roll
+        values[0] = 0.0  # roll
         values[2] = 0.25  # height
 
         self.yaml_node.publish_yaml_vecxd(
@@ -2882,6 +2930,7 @@ class FourthStageMixin:
             self.GLOBAL_FINAL_RIGHT_JUMP,
             self.GLOBAL_FINAL_YELLOW_FORWARD,
             self.GLOBAL_FINAL_LEFT_JUMP,
+            self.GLOBAL_FINAL_P3_ALIGN,
             self.DONE,
         ]
 
@@ -3034,7 +3083,8 @@ class FourthStageMixin:
 
         if new_state == self.HIT_TARGET:
             self.hit_start_pose = None
-            self.get_logger().info(f'[HIT] start by sim time, target={self.locked_target.det_type if self.locked_target else None}')
+            self.get_logger().info(
+                f'[HIT] start by sim time, target={self.locked_target.det_type if self.locked_target else None}')
 
         if new_state == self.HIT_BACKOFF_AFTER_HIT:
             self.after_hit_backoff_start_pose = None
@@ -3105,6 +3155,16 @@ class FourthStageMixin:
 
         if new_state == self.GLOBAL_FINAL_LEFT_JUMP:
             # 最终左跳一次，动作在 control_loop 中执行。
+            self.send_motion_cmd(0.0, 0.0, 0.0)
+
+        if new_state == self.GLOBAL_FINAL_P3_ALIGN:
+            # 第四赛段最后左跳后，复用第三赛段结束的黄线近/远中心矫正逻辑。
+            # 清空 P3 视觉缓存，避免刚切入时使用旧帧误差。
+            self.p3_s4_lat = 0.0
+            self.p3_s4_yaw = 0.0
+            self.p3_s4_valid = 0.0
+            self.p3_align_near_center = -1.0
+            self.p3_align_far_center = -1.0
             self.send_motion_cmd(0.0, 0.0, 0.0)
 
         if new_state == self.DONE:
@@ -3377,11 +3437,11 @@ class FourthStageMixin:
         return float(lateral)
 
     def compute_dashed_align_vy(
-        self,
-        dashed: Detection,
-        k: Optional[float] = None,
-        vy_max: Optional[float] = None,
-        vy_min: Optional[float] = None,
+            self,
+            dashed: Detection,
+            k: Optional[float] = None,
+            vy_max: Optional[float] = None,
+            vy_min: Optional[float] = None,
     ) -> float:
         if k is None:
             k = self.dashed_align_vy_k
@@ -3438,7 +3498,6 @@ class FourthStageMixin:
             wz = math.copysign(self.final_yellow_align_wz_min, wz)
 
         return wz
-
 
     # ---------- 第二次转向后的目标检测 / 对齐 / 撞击 ----------
     def detect_all_targets(self, frame_bgr) -> List[Detection]:
@@ -3603,7 +3662,8 @@ class FourthStageMixin:
             if bar is None:
                 self.global_center_stable_count = 0
                 self.send_motion_cmd(0.0, self.global_lateral_search_vy, 0.0)
-                self.get_logger().info('[GLOBAL_CENTER_BAR] bar lost, continue lateral search motion', throttle_duration_sec=0.5)
+                self.get_logger().info('[GLOBAL_CENTER_BAR] bar lost, continue lateral search motion',
+                                       throttle_duration_sec=0.5)
             else:
                 vy = self.compute_bar_align_vy(bar)
                 wz = self.compute_bar_depth_yaw_align_wz(bar)
@@ -3622,7 +3682,8 @@ class FourthStageMixin:
                     d = self.estimate_bar_depth(bar)
                     self.bar_return_target_depth_m = d
                     self.current_bar_det = bar
-                    self.get_logger().info(f'[GLOBAL_CENTER_BAR] centered, record bar depth={d}, enter BAR_FORWARD_UNDER')
+                    self.get_logger().info(
+                        f'[GLOBAL_CENTER_BAR] centered, record bar depth={d}, enter BAR_FORWARD_UNDER')
                     self.enter_state(self.BAR_FORWARD_UNDER)
                     return
 
@@ -3630,7 +3691,8 @@ class FourthStageMixin:
             if not obstacle_candidates:
                 self.global_center_stable_count = 0
                 self.send_motion_cmd(0.0, self.global_lateral_search_vy, 0.0)
-                self.get_logger().info('[GLOBAL_CENTER_OBS] obstacle lost, continue lateral search motion', throttle_duration_sec=0.5)
+                self.get_logger().info('[GLOBAL_CENTER_OBS] obstacle lost, continue lateral search motion',
+                                       throttle_duration_sec=0.5)
             else:
                 img_center_x = frame.shape[1] / 2.0
                 obs = min(obstacle_candidates, key=lambda d: abs(d.center_img[0] - img_center_x))
@@ -4355,7 +4417,8 @@ class FourthStageMixin:
                 )
 
                 if self.final_yellow_done_counter >= self.final_yellow_confirm_count:
-                    self.get_logger().info('[POST_HIT_FINAL_FORWARD] yellow reached lower area and aligned, go final left jumps')
+                    self.get_logger().info(
+                        '[POST_HIT_FINAL_FORWARD] yellow reached lower area and aligned, go final left jumps')
                     self.send_motion_cmd(0.0, 0.0, 0.0)
                     self.enter_state(self.FINAL_LEFT_JUMP)
                     return
@@ -4383,7 +4446,8 @@ class FourthStageMixin:
 
             # execute_left_jump_turn 内部会连续调用 send_left_jump_action_once()，
             # 每次左跳 mode=16/gait_id=0，之后接 Recovery stand mode=12/gait_id=0。
-            self.get_logger().info('[FINAL_LEFT_JUMP] timed left turn equivalent to two left jumps, then obstacle flow done')
+            self.get_logger().info(
+                '[FINAL_LEFT_JUMP] timed left turn equivalent to two left jumps, then obstacle flow done')
             self.execute_left_jump_turn(2, self.OBSTACLE_FLOW_DONE)
 
         elif self.state == self.OBSTACLE_FLOW_DONE:
@@ -4392,7 +4456,8 @@ class FourthStageMixin:
 
         elif self.state == self.GLOBAL_FINAL_RIGHT_JUMP:
             # 全部任务完成后的第一步：右跳一次。
-            self.get_logger().info('[GLOBAL_FINAL_RIGHT_JUMP] timed right turn equivalent to one right jump, then start final yellow alignment')
+            self.get_logger().info(
+                '[GLOBAL_FINAL_RIGHT_JUMP] timed right turn equivalent to one right jump, then start final yellow alignment')
             self.execute_right_jump_turn(1, self.GLOBAL_FINAL_YELLOW_FORWARD)
             return
 
@@ -4413,7 +4478,8 @@ class FourthStageMixin:
                         throttle_duration_sec=0.2
                     )
                     if self.global_final_yellow_disappear_counter >= self.global_final_yellow_disappear_confirm_count:
-                        self.get_logger().info('[GLOBAL_FINAL_YELLOW] yellow passed out of image, execute one final left jump')
+                        self.get_logger().info(
+                            '[GLOBAL_FINAL_YELLOW] yellow passed out of image, execute one final left jump')
                         self.enter_state(self.GLOBAL_FINAL_LEFT_JUMP)
                         return
                 else:
@@ -4457,9 +4523,73 @@ class FourthStageMixin:
             return
 
         elif self.state == self.GLOBAL_FINAL_LEFT_JUMP:
-            # 黄线到达图像下方阈值后，最后执行一次左跳，然后 DONE。
-            self.get_logger().info('[GLOBAL_FINAL_LEFT_JUMP] timed left turn equivalent to one left jump, then DONE')
-            self.execute_left_jump_turn(1, self.DONE)
+            # 黄线到达图像下方阈值后，最后执行一次左跳。
+            # 左跳完成后不直接 DONE，而是进入最终 P3 同款视觉矫正。
+            self.get_logger().info(
+                '[GLOBAL_FINAL_LEFT_JUMP] timed left turn equivalent to one left jump, then final P3-style align')
+            self.execute_left_jump_turn(1, self.GLOBAL_FINAL_P3_ALIGN)
+            return
+
+        elif self.state == self.GLOBAL_FINAL_P3_ALIGN:
+            # 第四赛段结束位置和第三赛段结束位置相同，直接复用第三赛段 P3_ALIGN_TRACK 的矫正逻辑。
+            # 注意：第四赛段 RGB 回调不会跑 P3 视觉，所以这里主动调用 p3_process_yellow_track(frame)。
+            self.p3_process_yellow_track(frame)
+            elapsed = self.state_elapsed_s()
+
+            if elapsed >= self.p3_align_max_duration_sec:
+                self.get_logger().info(
+                    f'[GLOBAL_FINAL_P3_ALIGN] timeout, finish all stages: '
+                    f'elapsed={elapsed:.2f}/{self.p3_align_max_duration_sec:.2f}s'
+                )
+                if self.show_debug_vis:
+                    self.p3_show_debug_window(frame)
+                self.enter_state(self.DONE)
+                return
+
+            if self.p3_s4_valid > 0.5:
+                err_lat = self.p3_s4_lat
+                err_yaw = self.p3_s4_yaw
+
+                if abs(err_lat) < self.p3_align_lat_tol and abs(err_yaw) < self.p3_align_yaw_tol:
+                    self.get_logger().info(
+                        f'[GLOBAL_FINAL_P3_ALIGN] complete: '
+                        f'lat={err_lat:.4f}/{self.p3_align_lat_tol:.4f}, '
+                        f'yaw={err_yaw:.4f}/{self.p3_align_yaw_tol:.4f}'
+                    )
+                    self.send_motion_cmd(0.0, 0.0, 0.0)
+                    if self.show_debug_vis:
+                        self.p3_show_debug_window(frame)
+                    self.enter_state(self.DONE)
+                    return
+
+                lateral_speed = clamp(
+                    err_lat * self.p3_align_lat_gain,
+                    -self.p3_align_lat_max,
+                    self.p3_align_lat_max
+                )
+                turn_speed = clamp(
+                    err_yaw * self.p3_align_yaw_gain,
+                    -self.p3_align_yaw_max,
+                    self.p3_align_yaw_max
+                )
+                self.send_motion_cmd(0.0, lateral_speed, turn_speed)
+                self.get_logger().info(
+                    f'[GLOBAL_FINAL_P3_ALIGN] align: '
+                    f'lat={err_lat:.4f}, yaw={err_yaw:.4f}, '
+                    f'cmd=(0.000,{lateral_speed:.3f},{turn_speed:.3f})',
+                    throttle_duration_sec=0.3
+                )
+                if self.show_debug_vis:
+                    self.p3_show_debug_window(frame)
+            else:
+                self.send_motion_cmd(0.05, 0.0, 0.0)
+                self.get_logger().info(
+                    f'[GLOBAL_FINAL_P3_ALIGN] no valid track, searching: '
+                    f'cmd=({self.p3_align_search_vx:.3f},0.000,{self.p3_align_search_wz:.3f})',
+                    throttle_duration_sec=0.5
+                )
+                if self.show_debug_vis:
+                    self.p3_show_debug_window(frame)
             return
 
         elif self.state == self.DONE:
@@ -4490,15 +4620,15 @@ class FourthStageMixin:
 
     # ---------- 可视化 ----------
     def update_debug_visualization(
-        self,
-        frame,
-        obstacle_candidates: List[Detection],
-        obstacle_pair: Optional[Tuple[Detection, Detection]],
-        dashed: Optional[Detection],
-        target_candidates: Optional[List[Detection]] = None,
-        chosen_target: Optional[Detection] = None,
-        final_yellow_line: Optional[Detection] = None,
-        bar_det: Optional[Detection] = None,
+            self,
+            frame,
+            obstacle_candidates: List[Detection],
+            obstacle_pair: Optional[Tuple[Detection, Detection]],
+            dashed: Optional[Detection],
+            target_candidates: Optional[List[Detection]] = None,
+            chosen_target: Optional[Detection] = None,
+            final_yellow_line: Optional[Detection] = None,
+            bar_det: Optional[Detection] = None,
     ):
         vis = frame.copy()
         h, w = vis.shape[:2]
@@ -4582,7 +4712,8 @@ class FourthStageMixin:
             2
         )
 
-        if self.state in [self.POST_DASH_TURN_1, self.POST_DASH_TURN_2, self.POST_HIT_OBS_TURN_1, self.POST_HIT_OBS_TURN_2]:
+        if self.state in [self.POST_DASH_TURN_1, self.POST_DASH_TURN_2, self.POST_HIT_OBS_TURN_1,
+                          self.POST_HIT_OBS_TURN_2]:
             turn_name = 'LEFT' if self.current_turn_dir > 0 else 'RIGHT'
             cv2.putText(
                 vis,
@@ -4724,6 +4855,7 @@ class FourthStageMixin:
         cv2.imshow('obstacle_dashed_task_debug', vis)
         cv2.waitKey(1)
 
+
 class CombinedStage1Stage2Node(Node):
     def __init__(self):
         super().__init__('combined_stage1_stage2_node')
@@ -4809,7 +4941,6 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('p1_blue_v_max', 255)
         self.declare_parameter('p1_blue_min_area', 6500.0)
         self.declare_parameter('p1_blue_depth_patch_half', 1)
-
 
         # =========================
         # 状态机状态说明
@@ -4965,7 +5096,7 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('stage1_cruise_forward_speed', 0.30)
         self.declare_parameter('stage2_cruise_forward_speed', 0.40)
         self.declare_parameter('stage3_cruise_ball_only_speed', 0.30)
-        self.declare_parameter('stage3_go_scan_speed', 0.40)
+        self.declare_parameter('stage3_go_scan_speed', 0.30)
         self.declare_parameter('stage3_go_final_speed', 0.40)
 
         # 黄线预触发减速区：先减速，再真正触发切状态
@@ -4985,7 +5116,7 @@ class CombinedStage1Stage2Node(Node):
 
         # 中线对齐：使用固定 vy 横向平移修正。
         self.declare_parameter('center_cruise_vy_gain', 0.25)  # 保留兼容，当前不再使用
-        self.declare_parameter('center_cruise_vy_max', 0.3)    # 保留兼容，当前不再使用
+        self.declare_parameter('center_cruise_vy_max', 0.3)  # 保留兼容，当前不再使用
         self.declare_parameter('center_ok_px', 10.0)
         self.declare_parameter('center_cruise_fixed_vy', 0.10)
         # 左右参考球深度差太大时，不再按两球图像中点做中线对齐，
@@ -5002,6 +5133,25 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('lateral_align_vy_min', 0.10)
         self.declare_parameter('lateral_align_px_tol', 20.0)
         self.declare_parameter('lateral_align_confirm_count', 1)
+
+        # =========================
+        # 对齐球阶段：目标丢失 / 深度突然变远保护
+        # =========================
+        # 对齐过程中如果目标球突然识别不到：
+        # 认为机器狗已经离球很近，球进入相机盲区/穿模，直接开始撞击。
+        self.declare_parameter('ball_align_lost_go_hit', True)
+
+        # 对齐过程中如果 best_target_ball 深度突然变大：
+        # 认为近处 A 球丢失，当前识别到的是远处 B 球，不继续对齐，直接撞击。
+        self.declare_parameter('ball_align_depth_jump_enabled', True)
+
+        # 深度增加超过这个值，认为是跳变。
+        # 例如上一帧 0.30m，下一帧 0.70m，增加 0.40m，就触发。
+        self.declare_parameter('ball_align_depth_jump_threshold_m', 0.25)
+
+        # 只有曾经看到目标小于这个距离，才启用“突然变远 -> 直接撞击”。
+        # 避免远距离正常识别波动时误触发。
+        self.declare_parameter('ball_align_near_depth_for_jump_m', 0.45)
 
         # =========================
         # 撞击 / 撞后移动
@@ -5038,7 +5188,7 @@ class CombinedStage1Stage2Node(Node):
         # =========================
         # 实际值需要按仿真里机器狗的真实转角微调。
         self.declare_parameter('timed_turn_wz_90', 0.60)
-        self.declare_parameter('timed_turn_duration_90_sec', 3.25)
+        self.declare_parameter('timed_turn_duration_90_sec', 3.20)
         self.declare_parameter('timed_turn_wz_180', 0.60)
         self.declare_parameter('timed_turn_duration_180_sec', 6.4)
         self.declare_parameter('timed_turn_step_height', 0.02)
@@ -5063,9 +5213,9 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('p3_fallback_forward_speed', 0.10)
 
         self.declare_parameter('p3_align_max_duration_sec', 8.0)
-        self.declare_parameter('p3_align_lat_tol', 0.01)
-        self.declare_parameter('p3_align_yaw_tol', 0.010)
-        self.declare_parameter('p3_align_lat_gain', 0.5)
+        self.declare_parameter('p3_align_lat_tol', 0.006)
+        self.declare_parameter('p3_align_yaw_tol', 0.006)
+        self.declare_parameter('p3_align_lat_gain', 0.6)
         self.declare_parameter('p3_align_yaw_gain', 2.0)
         self.declare_parameter('p3_align_lat_max', 0.15)
         self.declare_parameter('p3_align_yaw_max', 0.30)
@@ -5087,8 +5237,8 @@ class CombinedStage1Stage2Node(Node):
 
         self.declare_parameter('p3_align_near_y_ratio', 0.90)
         self.declare_parameter('p3_align_far_y_ratio', 0.70)
-        self.declare_parameter('p3_align_roi_left_ratio', 0.15)
-        self.declare_parameter('p3_align_roi_right_ratio', 0.85)
+        self.declare_parameter('p3_align_roi_left_ratio', 0.10)
+        self.declare_parameter('p3_align_roi_right_ratio', 0.90)
         self.declare_parameter('p3_align_min_gap_px', 30)
 
         # =========================
@@ -5164,7 +5314,6 @@ class CombinedStage1Stage2Node(Node):
         self.p1_blue_v_max = int(self.get_parameter('p1_blue_v_max').value)
         self.p1_blue_min_area = float(self.get_parameter('p1_blue_min_area').value)
         self.p1_blue_depth_patch_half = int(self.get_parameter('p1_blue_depth_patch_half').value)
-
 
         self.orange_h_min = int(self.get_parameter('orange_h_min').value)
         self.orange_h_max = int(self.get_parameter('orange_h_max').value)
@@ -5254,6 +5403,15 @@ class CombinedStage1Stage2Node(Node):
         self.lateral_align_px_tol = float(self.get_parameter('lateral_align_px_tol').value)
         self.lateral_align_confirm_count = int(self.get_parameter('lateral_align_confirm_count').value)
 
+        self.ball_align_lost_go_hit = bool(self.get_parameter('ball_align_lost_go_hit').value)
+        self.ball_align_depth_jump_enabled = bool(self.get_parameter('ball_align_depth_jump_enabled').value)
+        self.ball_align_depth_jump_threshold_m = float(
+            self.get_parameter('ball_align_depth_jump_threshold_m').value
+        )
+        self.ball_align_near_depth_for_jump_m = float(
+            self.get_parameter('ball_align_near_depth_for_jump_m').value
+        )
+
         self.hit_forward_speed = float(self.get_parameter('hit_forward_speed').value)
         self.hit_forward_duration_sec = float(self.get_parameter('hit_forward_duration_sec').value)
 
@@ -5271,8 +5429,10 @@ class CombinedStage1Stage2Node(Node):
             self.get_parameter('stage3_final_rotate_duration_sec').value
         )
 
-        self.stage2_forward_after_left_jump_speed = float(self.get_parameter('stage2_forward_after_left_jump_speed').value)
-        self.stage2_forward_after_left_jump_duration_sec = float(self.get_parameter('stage2_forward_after_left_jump_duration_sec').value)
+        self.stage2_forward_after_left_jump_speed = float(
+            self.get_parameter('stage2_forward_after_left_jump_speed').value)
+        self.stage2_forward_after_left_jump_duration_sec = float(
+            self.get_parameter('stage2_forward_after_left_jump_duration_sec').value)
 
         self.timed_turn_wz_90 = float(self.get_parameter('timed_turn_wz_90').value)
         self.timed_turn_duration_90_sec = float(self.get_parameter('timed_turn_duration_90_sec').value)
@@ -5436,6 +5596,11 @@ class CombinedStage1Stage2Node(Node):
 
         self.lateral_align_counter = 0
 
+        # BALL_LATERAL_ALIGN 阶段记录目标球深度变化。
+        # 用于判断：近处球是否丢失、是否误切到远处其他球。
+        self.ball_align_last_depth_m: Optional[float] = None
+        self.ball_align_min_seen_depth_m: Optional[float] = None
+
         self.hit_start_pose: Optional[Tuple[float, float, float]] = None
         self.hit_start_depth_m: Optional[float] = None
         self.hit_start_time_sec: Optional[float] = None
@@ -5469,7 +5634,6 @@ class CombinedStage1Stage2Node(Node):
         self.get_logger().info(f'rgb_topic={self.rgb_topic}')
         self.get_logger().info(f'depth_topic={self.depth_topic}')
         self.get_logger().info(f'tf: {self.global_frame} -> {self.base_frame}')
-
 
     # ============================================================
     # 第一赛段工具 / 视觉 / 控制状态机
@@ -5720,6 +5884,9 @@ class CombinedStage1Stage2Node(Node):
 
         # 撞球子链相关缓存
         self.lateral_align_counter = 0
+        self.ball_align_last_depth_m = None
+        self.ball_align_min_seen_depth_m = None
+
         self.hit_start_pose = None
         self.hit_start_depth_m = None
         self.hit_start_time_sec = None
@@ -5971,13 +6138,13 @@ class CombinedStage1Stage2Node(Node):
     # 球检测
     # ============================================================
     def detect_color_ball_candidates(
-        self,
-        frame: np.ndarray,
-        h_min: int, h_max: int,
-        s_min: int, s_max: int,
-        v_min: int, v_max: int,
-        min_contour_area: float,
-        color_name: str
+            self,
+            frame: np.ndarray,
+            h_min: int, h_max: int,
+            s_min: int, s_max: int,
+            v_min: int, v_max: int,
+            min_contour_area: float,
+            color_name: str
     ) -> List[Dict]:
         h, w = frame.shape[:2]
         self.rgb_w = w
@@ -6296,11 +6463,11 @@ class CombinedStage1Stage2Node(Node):
                     self.p3_stand_sent = False
 
             if new_state in (
-                'STAGE1_CRUISE_BALL_AND_YELLOW',
-                'STAGE2_CRUISE_YELLOW_ONLY',
-                'STAGE3_CRUISE_BALL_ONLY',
-                'STAGE3_GO_SCAN',
-                'STAGE3_GO_FINAL'
+                    'STAGE1_CRUISE_BALL_AND_YELLOW',
+                    'STAGE2_CRUISE_YELLOW_ONLY',
+                    'STAGE3_CRUISE_BALL_ONLY',
+                    'STAGE3_GO_SCAN',
+                    'STAGE3_GO_FINAL'
             ):
                 self.yellow_stop_counter = 0
 
@@ -6309,9 +6476,9 @@ class CombinedStage1Stage2Node(Node):
                 self.stage1_yellow_disappear_counter = 0
 
             if new_state in (
-                'STAGE1_ROTATE_LEFT_90',
-                'STAGE2_ROTATE_LEFT_90',
-                'STAGE3_ROTATE_BACK_180',
+                    'STAGE1_ROTATE_LEFT_90',
+                    'STAGE2_ROTATE_LEFT_90',
+                    'STAGE3_ROTATE_BACK_180',
             ):
                 self.timed_turn_start_time_sec = None
 
@@ -6326,23 +6493,38 @@ class CombinedStage1Stage2Node(Node):
 
             if new_state == 'BALL_LATERAL_ALIGN':
                 self.lateral_align_counter = 0
+
+                # 每次进入对齐球阶段，都重新记录深度变化。
+                self.ball_align_last_depth_m = None
+                self.ball_align_min_seen_depth_m = None
+
                 # 锁定“开始对齐时”的目标球所在侧。
                 # 后面对齐过程中目标球可能因为机器人横移跑到画面另一边，
                 # 撞后横移方向仍然使用这里锁定的初始 side，不再在撞击前冲时覆盖。
                 target = self.latest_ball_result.get('best_target_ball') if isinstance(self.latest_ball_result, dict) else None
+
                 if target is not None:
                     self.last_hit_side = target.get('side')
+
+                    depth = target.get('depth_m', None)
+                    if depth is not None:
+                        self.ball_align_last_depth_m = float(depth)
+                        self.ball_align_min_seen_depth_m = float(depth)
+
                     self.get_logger().info(
                         f'BALL_LATERAL_ALIGN lock hit side at align start: '
                         f'last_hit_side={self.last_hit_side}, '
                         f'target_center={target.get("center")}, '
                         f'error_x={target.get("error_x")}, '
-                        f'depth={target.get("depth_m")}'
+                        f'depth={target.get("depth_m")}, '
+                        f'radius={target.get("radius")}'
                     )
                 else:
                     self.last_hit_side = None
-                    self.get_logger().warn('BALL_LATERAL_ALIGN start but target is None; last_hit_side=None')
-
+                    self.get_logger().warn(
+                        'BALL_LATERAL_ALIGN start but target is None; '
+                        'last_hit_side=None, depth cache cleared'
+                    )
             if new_state == 'BALL_HIT_CONFIRM_FORWARD':
                 self.hit_start_pose = None
                 self.hit_start_depth_m = None
@@ -6590,11 +6772,11 @@ class CombinedStage1Stage2Node(Node):
         return wz
 
     def get_yellow_slowdown_speed(
-        self,
-        yellow_result: dict,
-        normal_speed: float,
-        slow_speed: float,
-        slowdown_ratio: float
+            self,
+            yellow_result: dict,
+            normal_speed: float,
+            slow_speed: float,
+            slowdown_ratio: float
     ) -> float:
         if yellow_result['img_shape'] is None or not yellow_result['has_line']:
             return normal_speed
@@ -6606,7 +6788,6 @@ class CombinedStage1Stage2Node(Node):
         if bottom is not None and bottom >= slow_threshold:
             return min(normal_speed, slow_speed)
         return normal_speed
-
 
     # ============================================================
     # 可视化调试窗口
@@ -6663,7 +6844,8 @@ class CombinedStage1Stage2Node(Node):
             cv2.line(vis, (0, image_center_y), (w - 1, image_center_y), (80, 80, 80), 1)
 
             cv2.putText(vis, f'state={self.state}', (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2)
-            cv2.putText(vis, f'orange_hit_count={self.orange_hit_count}', (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2)
+            cv2.putText(vis, f'orange_hit_count={self.orange_hit_count}', (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                        (255, 255, 255), 2)
 
             # 画黄色 ROI
             roi_top = int(h * self.yellow_roi_top_ratio)
@@ -6673,7 +6855,8 @@ class CombinedStage1Stage2Node(Node):
             roi_left = max(0, min(w - 1, roi_left))
             roi_right = max(roi_left + 1, min(w, roi_right))
             cv2.rectangle(vis, (roi_left, roi_top), (roi_right, h - 1), (0, 255, 255), 1)
-            cv2.putText(vis, 'yellow ROI', (roi_left + 3, max(18, roi_top - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+            cv2.putText(vis, 'yellow ROI', (roi_left + 3, max(18, roi_top - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                        (0, 255, 255), 1)
 
             # 当前状态的黄线触发阈值线
             ratio = self.get_current_yellow_ratio_for_debug()
@@ -6692,8 +6875,8 @@ class CombinedStage1Stage2Node(Node):
 
             # 画所有蓝球/橙球候选
             for color_name, balls, draw_color in (
-                ('B', ball.get('blue_balls', []), (255, 0, 0)),
-                ('O', ball.get('orange_balls', []), (0, 140, 255)),
+                    ('B', ball.get('blue_balls', []), (255, 0, 0)),
+                    ('O', ball.get('orange_balls', []), (0, 140, 255)),
             ):
                 for idx, b in enumerate(balls):
                     cx, cy = b['center']
@@ -6860,6 +7043,92 @@ class CombinedStage1Stage2Node(Node):
     # ============================================================
     # 球子链
     # ============================================================
+    def ball_align_should_go_hit(self, target: Optional[Dict]) -> bool:
+        """
+        BALL_LATERAL_ALIGN 阶段保护逻辑。
+
+        目的：
+        对齐 A 球时，如果 A 球太近导致识别不到，
+        或者 A 球丢失后 best_target_ball 突然变成远处 B 球，
+        不继续对齐 B 球，而是直接进入 BALL_HIT_CONFIRM_FORWARD。
+
+        触发条件：
+        1. target is None：
+        认为球已经太近 / 进入盲区 / 穿模，直接撞击。
+
+        2. 当前 target 深度比上一帧或历史最近深度突然变大：
+        认为当前识别到的不是原来的近处球，而是远处其他球，直接撞击。
+        """
+        if target is None:
+            if self.ball_align_lost_go_hit:
+                self.get_logger().warn(
+                    '[BALL_ALIGN_PROTECT] target=None during BALL_LATERAL_ALIGN, '
+                    'assume ball is too close/lost, go BALL_HIT_CONFIRM_FORWARD'
+                )
+                return True
+
+            return False
+
+        if not self.ball_align_depth_jump_enabled:
+            return False
+
+        cur_depth = target.get('depth_m', None)
+
+        if cur_depth is None:
+            self.get_logger().warn(
+                '[BALL_ALIGN_PROTECT] target depth=None during BALL_LATERAL_ALIGN, '
+                'assume ball is too close/lost, go BALL_HIT_CONFIRM_FORWARD'
+            )
+            return True
+
+        cur_depth = float(cur_depth)
+
+        # 初始化历史深度
+        if self.ball_align_last_depth_m is None:
+            self.ball_align_last_depth_m = cur_depth
+
+        if self.ball_align_min_seen_depth_m is None:
+            self.ball_align_min_seen_depth_m = cur_depth
+        else:
+            self.ball_align_min_seen_depth_m = min(self.ball_align_min_seen_depth_m, cur_depth)
+
+        last_depth = float(self.ball_align_last_depth_m)
+        min_seen = float(self.ball_align_min_seen_depth_m)
+
+        jump_from_last = cur_depth - last_depth
+        jump_from_min = cur_depth - min_seen
+
+        near_enough_before = min_seen <= self.ball_align_near_depth_for_jump_m
+
+        depth_jump = (
+            jump_from_last >= self.ball_align_depth_jump_threshold_m
+            or jump_from_min >= self.ball_align_depth_jump_threshold_m
+        )
+
+        if near_enough_before and depth_jump:
+            self.get_logger().warn(
+                f'[BALL_ALIGN_PROTECT] target depth suddenly increased, '
+                f'treat current target as another far ball and go hit: '
+                f'cur={cur_depth:.3f}, last={last_depth:.3f}, min_seen={min_seen:.3f}, '
+                f'jump_last={jump_from_last:.3f}, jump_min={jump_from_min:.3f}, '
+                f'jump_th={self.ball_align_depth_jump_threshold_m:.3f}, '
+                f'near_th={self.ball_align_near_depth_for_jump_m:.3f}, '
+                f'center={target.get("center")}, side={target.get("side")}, '
+                f'error_x={target.get("error_x")}, radius={target.get("radius")}'
+            )
+            return True
+
+        self.ball_align_last_depth_m = cur_depth
+
+        self.get_logger().info(
+            f'[BALL_ALIGN_PROTECT] normal target depth: '
+            f'cur={cur_depth:.3f}, last={last_depth:.3f}, min_seen={min_seen:.3f}, '
+            f'center={target.get("center")}, side={target.get("side")}',
+            throttle_duration_sec=0.3
+        )
+
+        return False
+
     def finish_ball_task_and_return(self, x: float, y: float, yaw: float):
         self.last_ball_done_time_sec = self.now_sec()
         self.last_ball_done_pose = (x, y, yaw)
@@ -6877,11 +7146,17 @@ class CombinedStage1Stage2Node(Node):
 
         # 1) 中线 -> 对齐球：只这里加最小 vy
         if self.state == 'BALL_LATERAL_ALIGN':
-            if target is None:
-                self.send_stop_command()
-                self.set_state('BALL_POST_HIT_SIDE_SHIFT')
+            # 新逻辑：
+            # 1. 对齐时目标突然丢失：认为已经很近，直接撞击。
+            # 2. 对齐时目标深度突然变远：认为 A 球丢失、误识别到远处 B 球，直接撞击。
+            # 注意：这里不发 STOP，也不进入 BALL_POST_HIT_SIDE_SHIFT。
+            if self.ball_align_should_go_hit(target):
+                self.get_logger().warn(
+                    '[BALL_LATERAL_ALIGN] target lost or depth jumped far, '
+                    'switch directly to BALL_HIT_CONFIRM_FORWARD'
+                )
+                self.set_state('BALL_HIT_CONFIRM_FORWARD')
                 return True
-
             error_px = target['error_x']
             err_norm = error_px / max(self.rgb_w * 0.5, 1.0)
 
@@ -7131,8 +7406,31 @@ class CombinedStage1Stage2Node(Node):
             roi_right = int(width * self.p3_align_roi_right_ratio)
 
             cv2.putText(vis, f'P3 state={self.state}', (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-            cv2.putText(vis, f'err_mid={self.p3_error_mid:.3f} err_near={self.p3_error_near:.3f}', (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-            cv2.putText(vis, f's4_valid={self.p3_s4_valid:.1f} lat={self.p3_s4_lat:.3f} yaw={self.p3_s4_yaw:.3f}', (10, 79), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+            cv2.putText(vis, f'err_mid={self.p3_error_mid:.3f} err_near={self.p3_error_near:.3f}', (10, 52),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+            cv2.putText(vis, f's4_valid={self.p3_s4_valid:.1f} lat={self.p3_s4_lat:.3f} yaw={self.p3_s4_yaw:.3f}',
+                        (10, 79), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+
+            vx, vy, wz = getattr(self, 'motion_cmd', (0.0, 0.0, 0.0))
+            cv2.putText(
+                vis,
+                f'cmd vx={vx:.3f} vy={vy:.3f} wz={wz:.3f}',
+                (10, 106),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 0),
+                2
+            )
+            if self.state == getattr(self, 'GLOBAL_FINAL_P3_ALIGN', None):
+                cv2.putText(
+                    vis,
+                    'P4 FINAL uses P3 align logic',
+                    (10, 133),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0, 255, 255),
+                    2
+                )
 
             cv2.line(vis, (crop_left, 0), (crop_left, height), (0, 255, 255), 2)
             cv2.line(vis, (crop_right, 0), (crop_right, height), (0, 255, 255), 2)
@@ -7214,7 +7512,7 @@ class CombinedStage1Stage2Node(Node):
                 self.get_logger().info('P3_ALIGN_TRACK timeout, finish all stages.')
                 self.set_state('DONE')
                 return
-            
+
             if self.p3_s4_valid > 0.5:
                 err_lat = self.p3_s4_lat
                 err_yaw = self.p3_s4_yaw
@@ -7228,7 +7526,8 @@ class CombinedStage1Stage2Node(Node):
                 turn_speed = clamp(err_yaw * self.p3_align_yaw_gain, -self.p3_align_yaw_max, self.p3_align_yaw_max)
                 self.p3_send_velocity_command(0.0, lateral_speed, turn_speed, step_height=self.p3_align_step_height)
             else:
-                self.p3_send_velocity_command(self.p3_align_search_vx, 0.0, self.p3_align_search_wz, step_height=self.p3_align_step_height)
+                self.p3_send_velocity_command(self.p3_align_search_vx, 0.0, self.p3_align_search_wz,
+                                              step_height=self.p3_align_step_height)
             return
 
     # ============================================================
@@ -7588,6 +7887,7 @@ class FullCompetitionNode(FourthStageMixin, CombinedStage1Stage2Node):
       - fourth-stage states only store RGB frames and run fourth-stage detectors inside fourth_control_loop;
       - second-stage states only run ball/yellow-stop detection.
     """
+
     def __init__(self):
         CombinedStage1Stage2Node.__init__(self)
         self.fourth_stage_init()
@@ -7666,7 +7966,17 @@ class FullCompetitionNode(FourthStageMixin, CombinedStage1Stage2Node):
     def handoff_to_fourth_stage(self, reason: str):
         self.get_logger().info(f'[HANDOFF] P3 -> P4: {reason}')
         self.clear_pre_fourth_vision_caches()
-        # Fourth stage uses a lower body posture; P1-P3 timed turns keep their own params.
+
+        if self.show_debug_vis:
+            try:
+                cv2.destroyWindow('second_stage_orange_yellow_debug')
+                cv2.destroyWindow('second_stage_yellow_mask')
+                cv2.destroyWindow('part3_origin_debug')
+                cv2.destroyWindow('part3_mask_mid')
+                cv2.destroyWindow('part3_mask_near')
+            except Exception as e:
+                self.get_logger().warn(f'[HANDOFF] destroy old debug windows failed: {e}')
+
         self.set_body_low()
         self.enter_initial_state()
 
@@ -7730,7 +8040,8 @@ class FullCompetitionNode(FourthStageMixin, CombinedStage1Stage2Node):
                 turn_speed = clamp(err_yaw * self.p3_align_yaw_gain, -self.p3_align_yaw_max, self.p3_align_yaw_max)
                 self.p3_send_velocity_command(0.0, lateral_speed, turn_speed, step_height=self.p3_align_step_height)
             else:
-                self.p3_send_velocity_command(self.p3_align_search_vx, 0.0, self.p3_align_search_wz, step_height=self.p3_align_step_height)
+                self.p3_send_velocity_command(self.p3_align_search_vx, 0.0, self.p3_align_search_wz,
+                                              step_height=self.p3_align_step_height)
             return
 
     def rgb_callback(self, msg: Image):
