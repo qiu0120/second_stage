@@ -1361,11 +1361,13 @@ class FourthStageMixin:
         self.declare_parameter('after_obstacle_search_x_ratio_max', 0.50)
 
         # 限高杆流程参数
-        self.declare_parameter('bar_search_forward_speed', 0.60)
-        self.declare_parameter('bar_trigger_distance_m', 0.40)
+        self.declare_parameter('global_bar_center_fixed_vy', 0.20)
+        self.declare_parameter('global_bar_center_px_deadband', 7)
+        self.declare_parameter('bar_search_forward_speed', 1.0)
+        self.declare_parameter('bar_trigger_distance_m', 0.50)
         self.declare_parameter('bar_align_vy_k', 0.35)
         self.declare_parameter('bar_align_vy_max', 0.30)
-        self.declare_parameter('bar_align_vy_min', 0.20)
+        self.declare_parameter('bar_align_vy_min', 0.10)
         self.declare_parameter('bar_center_px_deadband', 7)
         self.declare_parameter('bar_center_stable_frames', 3)
         # 限高杆朝向矫正：居中和穿杆时，根据限高杆左右两侧深度差给一个小 wz。
@@ -1378,15 +1380,15 @@ class FourthStageMixin:
         self.declare_parameter('bar_depth_yaw_sample_half_size', 4)
         # 如果实测发现越修越歪，把这个参数改成 -1。
         self.declare_parameter('bar_depth_yaw_sign', -1.0)
-        self.declare_parameter('backoff_after_hit_speed', 0.60)
+        self.declare_parameter('backoff_after_hit_speed', 1.0)
         self.declare_parameter('backoff_bar_depth_tolerance_m', 0.05)
         self.declare_parameter('backoff_min_time_s', 0.30)
         # 回退阶段看到限高杆时，用限高杆深度误差闭环修正 vx。
         # d < target_depth 时继续后退；d > target_depth 时允许小幅向前修回来。
         self.declare_parameter('bar_backoff_depth_vx_align_enabled', True)
         self.declare_parameter('bar_backoff_depth_vx_k', 0.60)
-        self.declare_parameter('bar_backoff_depth_vx_max', 0.60)
-        self.declare_parameter('bar_backoff_depth_vx_min', 0.40)
+        self.declare_parameter('bar_backoff_depth_vx_max', 1.0)
+        self.declare_parameter('bar_backoff_depth_vx_min', 0.60)
         self.declare_parameter('bar_backoff_allow_forward_correction', True)
 
         # 运动参数
@@ -1417,9 +1419,15 @@ class FourthStageMixin:
         self.declare_parameter('follow_forward_speed', 0.50)
         self.declare_parameter('follow_align_vy_k', 0.18)
         # FOLLOW_DASHED_UNTIL_LOST 阶段单独使用的横向速度上下限，
+        # 不再和 ALIGN_DASHED_LINE 共用 dashed_align_vy_min / dashed_align_vy_max。
         self.declare_parameter('follow_align_vy_max', 0.15)
         self.declare_parameter('follow_align_vy_min', 0.05)
-        self.declare_parameter('dashed_lost_stop_frames', 3)
+        self.declare_parameter('dashed_lost_stop_frames', 2)
+
+        # 沿虚线前进阶段的有效识别范围。
+        # 只有虚线中心 x 落在 get_dashed_target_x() 附近这个范围内，才认为虚线仍然有效。
+        # 超过范围，即使视觉检测到了虚线，也按虚线消失处理。
+        self.declare_parameter('follow_dashed_valid_x_range_px',50)
 
         # =========================
         # 虚线消失后的后续任务参数
@@ -1452,22 +1460,22 @@ class FourthStageMixin:
         # 第二次转向后的目标检测 / 对齐 / 撞击参数
         # 复用限高杆任务代码里的目标检测逻辑：蓝球、白球、可乐
         # =========================
-        self.declare_parameter('target_search_forward_speed', 0.20)
-        self.declare_parameter('align_forward_speed_far', 0.40)
-        self.declare_parameter('align_forward_speed_near', 0.40)
+        self.declare_parameter('target_search_forward_speed', 0.60)
+        self.declare_parameter('align_forward_speed_far', 0.60)
+        self.declare_parameter('align_forward_speed_near', 0.60)
         self.declare_parameter('align_vy_k', 0.35)
         self.declare_parameter('align_vy_max', 0.30)
-        self.declare_parameter('align_vy_min', 0.20)
+        self.declare_parameter('align_vy_min', 0.15)
         self.declare_parameter('target_stable_frames', 3)
         self.declare_parameter('hit_trigger_distance_m', 0.20)
         self.declare_parameter('center_px_deadband', 7)
 
-        self.declare_parameter('hit_blue_ball_speed', 0.30)
-        self.declare_parameter('hit_blue_ball_duration_s', 0.85)
-        self.declare_parameter('hit_white_ball_speed', 0.30)
-        self.declare_parameter('hit_white_ball_duration_s', 1.50)
-        self.declare_parameter('hit_cola_speed', 0.30)
-        self.declare_parameter('hit_cola_duration_s', 0.85)
+        self.declare_parameter('hit_blue_ball_speed', 0.50)
+        self.declare_parameter('hit_blue_ball_duration_s', 0.35)
+        self.declare_parameter('hit_white_ball_speed', 0.50)
+        self.declare_parameter('hit_white_ball_duration_s', 0.75)
+        self.declare_parameter('hit_cola_speed', 0.50)
+        self.declare_parameter('hit_cola_duration_s', 0.35)
         self.declare_parameter('hit_timeout_s', 10.0)
 
         # 撞击完成后：先后退一小段仿真时间，再按固定角速度转固定时间代替原来的连续左跳
@@ -1483,12 +1491,12 @@ class FourthStageMixin:
 
         # 左跳完成后：前进并识别两个蓝色障碍物，按虚线侧选择其中一个居中
         # 之前虚线在左边 -> 对齐右边障碍物；之前虚线在右边 -> 对齐左边障碍物
-        self.declare_parameter('post_hit_obstacle_forward_speed', 0.30)
-        self.declare_parameter('post_hit_obstacle_search_forward_speed', 0.30)
-        self.declare_parameter('post_hit_obstacle_trigger_distance_m', 0.20)
+        self.declare_parameter('post_hit_obstacle_forward_speed', 0.50)
+        self.declare_parameter('post_hit_obstacle_search_forward_speed', 0.50)
+        self.declare_parameter('post_hit_obstacle_trigger_distance_m', 0.25)
         self.declare_parameter('post_hit_obstacle_align_vy_k', 0.35)
         self.declare_parameter('post_hit_obstacle_align_vy_max', 0.30)
-        self.declare_parameter('post_hit_obstacle_align_vy_min', 0.20)
+        self.declare_parameter('post_hit_obstacle_align_vy_min', 0.15)
         self.declare_parameter('post_hit_obstacle_center_px_deadband', 7)
 
         # 对齐选中障碍物并到达距离后：转向 -> 前进 -> 反向转向 -> 最后前进
@@ -1499,7 +1507,7 @@ class FourthStageMixin:
         self.declare_parameter('post_hit_obs_forward_duration_s', 2.0)
         self.declare_parameter('post_hit_obs_forward_speed', 0.40)
         # 第二次转回后，先按仿真时间向前走一段，再进入最终横向黄线识别对正
-        self.declare_parameter('post_hit_final_forward_duration_s', 0.50)
+        self.declare_parameter('post_hit_final_forward_duration_s',0.50)
         self.declare_parameter('post_hit_final_forward_speed', 0.40)
         # 绕过障碍物第二次转回后的预前进阶段：如果提前看到前方横向黄线，
         # 只用它的角度修正 wz，不用它提前结束该状态。
@@ -1517,11 +1525,18 @@ class FourthStageMixin:
         self.declare_parameter('final_yellow_disappear_confirm_count', 2)
 
         # 全局最终收尾阶段：所有流程完成后，右跳 -> 前进识别横向黄线并矫正 -> 左跳一次。
-        # 黄线检测仍复用 final_yellow.* 的 HSV/ROI/形状过滤参数。
-        self.declare_parameter('global_final_yellow_forward_speed', 0.60)
+        # 没接近最终横向黄线前，用这个速度快速前进
+        self.declare_parameter('global_final_yellow_forward_speed', 0.80)
+        # 横向黄线接近后，切换成这个慢速
+        self.declare_parameter('global_final_yellow_slow_forward_speed', 0.40)
+        # 当横向黄线底部达到图像高度的这个比例后，开始减速
+        self.declare_parameter('global_final_yellow_slow_start_ratio', 0.90)
+        # 当横向黄线底部达到这个比例后，认为已经到达下方区域
+        # 到达后不马上左跳，而是继续前进，等黄线从画面中消失
         self.declare_parameter('global_final_yellow_stop_line_y_ratio', 1.0)
-        self.declare_parameter('global_final_yellow_confirm_count', 2)
-        # 全局最终收尾同理：黄线先到达下方，再连续消失若干帧后才停。
+        # 黄线到达下方区域需要连续确认几帧
+        self.declare_parameter('global_final_yellow_confirm_count', 1)
+        # 黄线到达下方区域后，连续消失几帧才进入最终左跳
         self.declare_parameter('global_final_yellow_disappear_confirm_count', 2)
 
         # 限高杆参数
@@ -1581,6 +1596,8 @@ class FourthStageMixin:
         self.global_initial_lateral_shift_vy = float(self.get_parameter('global_initial_lateral_shift_vy').value)
         self.global_lateral_search_vy = float(self.get_parameter('global_lateral_search_vy').value)
         self.global_center_stable_frames = int(self.get_parameter('global_center_stable_frames').value)
+        self.global_bar_center_fixed_vy = abs(float(self.get_parameter('global_bar_center_fixed_vy').value))
+        self.global_bar_center_px_deadband = int(self.get_parameter('global_bar_center_px_deadband').value)
         self.global_after_task_shift_vy = float(self.get_parameter('global_after_task_shift_vy').value)
         self.global_after_task_shift_duration_s = float(self.get_parameter('global_after_task_shift_duration_s').value)
         self.global_after_obstacle_shift_duration_left_dash_s = float(
@@ -1647,6 +1664,7 @@ class FourthStageMixin:
         self.follow_align_vy_max = float(self.get_parameter('follow_align_vy_max').value)
         self.follow_align_vy_min = float(self.get_parameter('follow_align_vy_min').value)
         self.dashed_lost_stop_frames = int(self.get_parameter('dashed_lost_stop_frames').value)
+        self.follow_dashed_valid_x_range_px = int(self.get_parameter('follow_dashed_valid_x_range_px').value)
 
         self.tf_parent_frame = str(self.get_parameter('tf_parent_frame').value)
         self.tf_child_frame = str(self.get_parameter('tf_child_frame').value)
@@ -1722,12 +1740,29 @@ class FourthStageMixin:
         self.final_yellow_disappear_confirm_count = int(
             self.get_parameter('final_yellow_disappear_confirm_count').value)
 
-        self.global_final_yellow_forward_speed = float(self.get_parameter('global_final_yellow_forward_speed').value)
+        self.global_final_yellow_forward_speed = float(
+            self.get_parameter('global_final_yellow_forward_speed').value
+        )
+
+        self.global_final_yellow_slow_forward_speed = float(
+            self.get_parameter('global_final_yellow_slow_forward_speed').value
+        )
+
+        self.global_final_yellow_slow_start_ratio = float(
+            self.get_parameter('global_final_yellow_slow_start_ratio').value
+        )
+
         self.global_final_yellow_stop_line_y_ratio = float(
-            self.get_parameter('global_final_yellow_stop_line_y_ratio').value)
-        self.global_final_yellow_confirm_count = int(self.get_parameter('global_final_yellow_confirm_count').value)
+            self.get_parameter('global_final_yellow_stop_line_y_ratio').value
+        )
+
+        self.global_final_yellow_confirm_count = int(
+            self.get_parameter('global_final_yellow_confirm_count').value
+        )
+
         self.global_final_yellow_disappear_confirm_count = int(
-            self.get_parameter('global_final_yellow_disappear_confirm_count').value)
+            self.get_parameter('global_final_yellow_disappear_confirm_count').value
+        )
 
         self.hit_params = {
             'blue_ball': {
@@ -2161,12 +2196,17 @@ class FourthStageMixin:
             return None
         return float(np.percentile(valid, 20))
 
-    def is_bar_centered(self, bar: Detection) -> bool:
+    def is_bar_centered(self, bar: Detection, deadband_px: Optional[int] = None) -> bool:
         if self.latest_bgr is None or bar is None:
             return False
+
+        if deadband_px is None:
+            deadband_px = self.bar_center_px_deadband
+
         img_center_x = self.latest_bgr.shape[1] / 2.0
         err_px = bar.center_img[0] - img_center_x
-        return abs(err_px) <= self.bar_center_px_deadband
+
+        return abs(err_px) <= int(deadband_px)
 
     def compute_bar_align_vy(self, bar: Detection) -> float:
         if self.latest_bgr is None or bar is None:
@@ -2181,6 +2221,19 @@ class FourthStageMixin:
         if 0.0 < abs(vy) < self.bar_align_vy_min:
             vy = math.copysign(self.bar_align_vy_min, vy)
         return vy
+
+    def compute_global_bar_center_fixed_vy(self, bar: Detection) -> float:
+        if self.latest_bgr is None or bar is None:
+            return 0.0
+
+        img_center_x = self.latest_bgr.shape[1] / 2.0
+        err_px = bar.center_img[0] - img_center_x
+
+        if abs(err_px) <= self.global_bar_center_px_deadband:
+            return 0.0
+
+        vy = -math.copysign(self.global_bar_center_fixed_vy, err_px)
+        return float(vy)
 
     def sample_depth_patch_by_rgb(self, rgb_x: int, rgb_y: int, half_size: int) -> Optional[float]:
         """
@@ -3389,6 +3442,17 @@ class FourthStageMixin:
         img_center_x = self.latest_bgr.shape[1] / 2.0
         return 'left' if dashed.center_img[0] < img_center_x else 'right'
 
+    def get_forced_dashed_side(self) -> Optional[str]:
+        """
+        debug_dashed_side 控制规则：
+        - left/right：强制使用这个方向
+        - auto：不强制，交给视觉判断
+        """
+        side = str(getattr(self, 'debug_dashed_side', 'auto')).strip().lower()
+        if side in ('left', 'right'):
+            return side
+        return None
+
     def get_dashed_target_x(self) -> float:
         img_center_x = self.latest_bgr.shape[1] / 2.0
         if self.dashed_side == 'left':
@@ -3396,6 +3460,34 @@ class FourthStageMixin:
         if self.dashed_side == 'right':
             return img_center_x - self.dashed_target_offset_px
         return img_center_x
+
+    def is_dashed_valid_for_follow(self, dashed: Optional[Detection]) -> bool:
+        """
+        FOLLOW_DASHED_UNTIL_LOST 阶段专用判断。
+
+        对齐虚线完成后，机器狗沿虚线向前走。
+        此时不能只要检测器检测到黄色虚线就认为还在跟随。
+
+        只有当前检测到的虚线中心 x 落在“对齐目标线 target_x”附近一定范围内，
+        才认为这条虚线还是当前正在跟随的那条线。
+
+        如果虚线中心偏离 target_x 太远：
+            - 不参与跟随修正；
+            - 按 dashed lost 处理；
+            - 连续 lost 若干帧后进入 POST_DASH_FORWARD。
+        """
+        if dashed is None:
+            return False
+
+        if self.latest_bgr is None:
+            return False
+
+        target_x = self.get_dashed_target_x()
+        cx = float(dashed.center_img[0])
+        valid_range = float(self.follow_dashed_valid_x_range_px)
+
+        err_px = cx - target_x
+        return abs(err_px) <= valid_range
 
     def get_pre_shift_dir_sign(self) -> float:
         """
@@ -3498,6 +3590,32 @@ class FourthStageMixin:
             wz = math.copysign(self.final_yellow_align_wz_min, wz)
 
         return wz
+
+    def get_global_final_yellow_forward_speed(self, final_yellow_line: Optional[Detection]) -> float:
+        """
+        全局最终横向黄线阶段的前进速度选择。
+
+        逻辑：
+        1. 没看到黄线时：使用快速速度 global_final_yellow_forward_speed
+        2. 看到黄线但还没到减速阈值：继续快速
+        3. 黄线 bottom_ratio >= global_final_yellow_slow_start_ratio：切换慢速
+
+        bottom_ratio 含义：
+            bottom_ratio = 黄线检测框底部 y 坐标 / 图像高度
+
+        例如图像高度 480，slow_start_ratio=0.85：
+            480 * 0.85 = 408
+        也就是横向黄线底部到达 y=408 附近后开始减速。
+        """
+        if final_yellow_line is None:
+            return self.global_final_yellow_forward_speed
+
+        bottom_ratio = float(final_yellow_line.extra.get('bottom_ratio', 0.0))
+
+        if bottom_ratio >= self.global_final_yellow_slow_start_ratio:
+            return self.global_final_yellow_slow_forward_speed
+
+        return self.global_final_yellow_forward_speed
 
     # ---------- 第二次转向后的目标检测 / 对齐 / 撞击 ----------
     def detect_all_targets(self, frame_bgr) -> List[Detection]:
@@ -3659,31 +3777,54 @@ class FourthStageMixin:
         elif self.state == self.GLOBAL_CENTER_BAR:
             bar = self.bar_detector.detect(frame)
             bar_for_vis = bar
+
             if bar is None:
                 self.global_center_stable_count = 0
                 self.send_motion_cmd(0.0, self.global_lateral_search_vy, 0.0)
-                self.get_logger().info('[GLOBAL_CENTER_BAR] bar lost, continue lateral search motion',
-                                       throttle_duration_sec=0.5)
+
+                self.get_logger().info(
+                    '[GLOBAL_CENTER_BAR] bar lost, continue lateral search motion',
+                    throttle_duration_sec=0.5
+                )
+
             else:
-                vy = self.compute_bar_align_vy(bar)
+                vy = self.compute_global_bar_center_fixed_vy(bar)
                 wz = self.compute_bar_depth_yaw_align_wz(bar)
                 self.send_motion_cmd(0.0, vy, wz)
-                if self.is_bar_centered(bar):
+
+                centered = self.is_bar_centered(
+                    bar,
+                    deadband_px=self.global_bar_center_px_deadband
+                )
+
+                if centered:
                     self.global_center_stable_count += 1
                 else:
                     self.global_center_stable_count = 0
+
+                img_center_x = self.latest_bgr.shape[1] / 2.0
+                err_px = bar.center_img[0] - img_center_x
+
                 self.get_logger().info(
-                    f'[GLOBAL_CENTER_BAR] center={bar.center_img}, vy={vy:.3f}, '
-                    f'wz={wz:.3f}, depth_yaw={self.latest_bar_depth_yaw_info}, '
+                    f'[GLOBAL_CENTER_BAR] fixed-vy center align: '
+                    f'center={bar.center_img}, err_px={err_px:.1f}, '
+                    f'deadband={self.global_bar_center_px_deadband}, '
+                    f'vy={vy:.3f}, wz={wz:.3f}, '
+                    f'depth_yaw={self.latest_bar_depth_yaw_info}, '
                     f'stable={self.global_center_stable_count}/{self.global_center_stable_frames}',
                     throttle_duration_sec=0.2
                 )
+
                 if self.global_center_stable_count >= self.global_center_stable_frames:
                     d = self.estimate_bar_depth(bar)
                     self.bar_return_target_depth_m = d
                     self.current_bar_det = bar
+
                     self.get_logger().info(
-                        f'[GLOBAL_CENTER_BAR] centered, record bar depth={d}, enter BAR_FORWARD_UNDER')
+                        f'[GLOBAL_CENTER_BAR] centered by fixed-vy, '
+                        f'record bar depth={d}, enter BAR_FORWARD_UNDER'
+                    )
+
                     self.enter_state(self.BAR_FORWARD_UNDER)
                     return
 
@@ -3933,11 +4074,21 @@ class FourthStageMixin:
                             f'{self.obstacle_trigger_distance_m:.3f}, switch to dashed align'
                         )
 
-                        # 新一轮黄线逻辑开始，先清空方向记录
-                        self.dashed_side = None
-                        self.dashed_pre_shift_start_time = None
+                        forced_side = self.get_forced_dashed_side()
 
-                        self.enter_state(self.ALIGN_DASHED_LINE)
+                        if forced_side is not None:
+                            self.dashed_side = forced_side
+                            self.get_logger().info(
+                                f'[OBS_APPROACH] debug_dashed_side={forced_side}, force dashed_side={self.dashed_side}'
+                            )
+                        else:
+                            self.dashed_side = None
+                            self.get_logger().info(
+                                '[OBS_APPROACH] debug_dashed_side=auto, dashed_side will be decided by vision'
+                            )
+
+self.dashed_pre_shift_start_time = None
+self.enter_state(self.ALIGN_DASHED_LINE)
 
         elif self.state == self.ALIGN_DASHED_LINE:
             if dashed is None:
@@ -3950,12 +4101,21 @@ class FourthStageMixin:
             else:
                 # 第一次看到虚线时，先记录它在左边还是右边，随后进入预横移状态
                 if self.dashed_side is None:
-                    self.dashed_side = self.get_dashed_side(dashed)
+                    forced_side = self.get_forced_dashed_side()
+
+                    if forced_side is not None:
+                        self.dashed_side = forced_side
+                        side_source = 'debug'
+                    else:
+                        self.dashed_side = self.get_dashed_side(dashed)
+                        side_source = 'vision'
+
                     self.get_logger().info(
-                        f'[DASH_ALIGN] first dashed side={self.dashed_side}, '
+                        f'[DASH_ALIGN] first dashed side={self.dashed_side}, source={side_source}, '
                         f'center={dashed.center_img}, target_x={self.get_dashed_target_x():.1f}, '
                         f'enter pre side shift'
                     )
+
                     self.enter_state(self.DASH_PRE_SIDE_SHIFT)
                     return
 
@@ -4007,29 +4167,66 @@ class FourthStageMixin:
 
 
         elif self.state == self.FOLLOW_DASHED_UNTIL_LOST:
-            if dashed is None:
+            # 新逻辑：
+            # 对齐虚线之后，沿虚线向前走时，不是所有检测到的虚线都算有效。
+            # 只有虚线中心 x 落在 get_dashed_target_x() 附近 follow_dashed_valid_x_range_px 范围内，
+            # 才认为当前虚线仍然存在。
+            # 如果检测到的虚线偏得太远，也按“虚线消失”处理。
+            dashed_valid = self.is_dashed_valid_for_follow(dashed)
+
+            if not dashed_valid:
                 self.dashed_lost_count += 1
+
+                if dashed is None:
+                    self.get_logger().info(
+                        f'[FOLLOW_DASH] dashed=None, '
+                        f'lost_count={self.dashed_lost_count}/{self.dashed_lost_stop_frames}',
+                        throttle_duration_sec=0.2
+                    )
+                else:
+                    target_x = self.get_dashed_target_x()
+                    cx = float(dashed.center_img[0])
+                    err_px = cx - target_x
+
+                    self.get_logger().info(
+                        f'[FOLLOW_DASH] dashed detected but outside valid range, treat as lost: '
+                        f'center_x={cx:.1f}, target_x={target_x:.1f}, '
+                        f'err={err_px:.1f}px, valid_range=±{self.follow_dashed_valid_x_range_px}px, '
+                        f'lost_count={self.dashed_lost_count}/{self.dashed_lost_stop_frames}',
+                        throttle_duration_sec=0.2
+                    )
 
                 if self.dashed_lost_count >= self.dashed_lost_stop_frames:
                     self.get_logger().info(
-                        f'[FOLLOW_DASH] dashed lost {self.dashed_lost_count} frames, go post dash forward'
+                        f'[FOLLOW_DASH] dashed lost/out-of-range '
+                        f'{self.dashed_lost_count} frames, go post dash forward'
                     )
                     self.enter_state(self.POST_DASH_FORWARD)
                 else:
-                    # 防止单帧漏检，短暂继续向前
+                    # 防止单帧漏检或单帧跳变，短暂继续向前。
+                    # 注意这里不给 vy 修正，避免被错误虚线带偏。
                     self.send_motion_cmd(self.follow_forward_speed, 0.0, 0.0)
+
             else:
                 self.dashed_lost_count = 0
+
                 vy = self.compute_dashed_align_vy(
                     dashed,
                     k=self.follow_align_vy_k,
                     vy_max=self.follow_align_vy_max,
                     vy_min=self.follow_align_vy_min,
                 )
+
                 self.send_motion_cmd(self.follow_forward_speed, vy, 0.0)
 
+                target_x = self.get_dashed_target_x()
+                cx = float(dashed.center_img[0])
+                err_px = cx - target_x
+
                 self.get_logger().info(
-                    f'[FOLLOW_DASH] center={dashed.center_img}, '
+                    f'[FOLLOW_DASH] valid dashed: center={dashed.center_img}, '
+                    f'target_x={target_x:.1f}, err={err_px:.1f}px, '
+                    f'valid_range=±{self.follow_dashed_valid_x_range_px}px, '
                     f'cmd=({self.follow_forward_speed:.3f},{vy:.3f},0.000), '
                     f'vy_limit=[{self.follow_align_vy_min:.3f},{self.follow_align_vy_max:.3f}]',
                     throttle_duration_sec=0.2
@@ -4380,9 +4577,11 @@ class FourthStageMixin:
 
 
         elif self.state == self.POST_HIT_FINAL_FORWARD:
-            # 障碍物流程内部的最终黄线：保持原逻辑。
-            # 检测到前方横向黄线到达图像下方阈值，并且角度基本对正后，
-            # 直接进入 FINAL_LEFT_JUMP；不再等待黄线消失。
+            # 障碍物流程内部的最终横向黄线收尾：
+            # 1. 没看到黄线：继续向前找黄线；
+            # 2. 看到黄线但还没到下方阈值：vx 正常前进，同时用 wz 修正角度；
+            # 3. 黄线已经到达下方阈值但角度没对正：vx=0, vy=0，只原地 wz 调角度；
+            # 4. 黄线到达下方阈值且角度满足：进入 FINAL_LEFT_JUMP。
             final_yellow_line = self.final_yellow_detector.detect(frame)
             self.latest_final_yellow_line = final_yellow_line
 
@@ -4393,37 +4592,53 @@ class FourthStageMixin:
                     '[POST_HIT_FINAL_FORWARD] no horizontal yellow line, keep moving forward',
                     throttle_duration_sec=0.3
                 )
+                return
+
+            bottom_y = int(final_yellow_line.extra.get('bottom_y', 0))
+            bottom_ratio = float(final_yellow_line.extra.get('bottom_ratio', 0.0))
+            angle_deg = float(final_yellow_line.extra.get('angle_deg', 0.0))
+            abs_tilt = float(final_yellow_line.extra.get('abs_tilt_deg', abs(angle_deg)))
+            wz = self.compute_final_yellow_wz(final_yellow_line)
+
+            reached_line = bottom_ratio >= self.final_yellow_stop_line_y_ratio
+            angle_ok = abs_tilt <= self.final_yellow_done_tilt_deg
+
+            if reached_line and angle_ok:
+                self.final_yellow_done_counter += 1
             else:
-                bottom_y = int(final_yellow_line.extra.get('bottom_y', 0))
-                bottom_ratio = float(final_yellow_line.extra.get('bottom_ratio', 0.0))
-                angle_deg = float(final_yellow_line.extra.get('angle_deg', 0.0))
-                abs_tilt = float(final_yellow_line.extra.get('abs_tilt_deg', abs(angle_deg)))
-                wz = self.compute_final_yellow_wz(final_yellow_line)
+                self.final_yellow_done_counter = 0
 
-                reached_line = bottom_ratio >= self.final_yellow_stop_line_y_ratio
-                angle_ok = abs_tilt <= self.final_yellow_done_tilt_deg
-
-                if reached_line and angle_ok:
-                    self.final_yellow_done_counter += 1
-                else:
-                    self.final_yellow_done_counter = 0
-
+            if self.final_yellow_done_counter >= self.final_yellow_confirm_count:
                 self.get_logger().info(
-                    f'[POST_HIT_FINAL_FORWARD] approach yellow by RGB: '
-                    f'bottom={bottom_y}, ratio={bottom_ratio:.3f}/{self.final_yellow_stop_line_y_ratio:.3f}, '
-                    f'angle={angle_deg:.1f}deg, abs_tilt={abs_tilt:.1f}/{self.final_yellow_done_tilt_deg:.1f}, '
-                    f'wz={wz:.3f}, counter={self.final_yellow_done_counter}/{self.final_yellow_confirm_count}',
-                    throttle_duration_sec=0.2
+                    '[POST_HIT_FINAL_FORWARD] yellow reached lower area and aligned, go FINAL_LEFT_JUMP'
                 )
+                self.send_motion_cmd(0.0, 0.0, 0.0)
+                self.enter_state(self.FINAL_LEFT_JUMP)
+                return
 
-                if self.final_yellow_done_counter >= self.final_yellow_confirm_count:
-                    self.get_logger().info(
-                        '[POST_HIT_FINAL_FORWARD] yellow reached lower area and aligned, go final left jumps')
-                    self.send_motion_cmd(0.0, 0.0, 0.0)
-                    self.enter_state(self.FINAL_LEFT_JUMP)
-                    return
+            if reached_line:
+                # 黄线已经到图像下方，但角度还没满足：
+                # 停止前进，原地只用 wz 调整朝向，避免黄线继续往下跑出画面。
+                vx_cmd = 0.0
+                vy_cmd = 0.0
+                phase = 'reached_lower_align_in_place'
+            else:
+                # 黄线还没到下方阈值：
+                # 正常向前靠近，同时用 wz 修正角度。
+                vx_cmd = self.post_hit_final_forward_speed
+                vy_cmd = 0.0
+                phase = 'approach_with_angle_align'
 
-                self.send_motion_cmd(self.post_hit_final_forward_speed, 0.0, wz)
+            self.send_motion_cmd(vx_cmd, vy_cmd, wz)
+
+            self.get_logger().info(
+                f'[POST_HIT_FINAL_FORWARD] {phase}: '
+                f'bottom={bottom_y}, ratio={bottom_ratio:.3f}/{self.final_yellow_stop_line_y_ratio:.3f}, '
+                f'angle={angle_deg:.1f}deg, abs_tilt={abs_tilt:.1f}/{self.final_yellow_done_tilt_deg:.1f}, '
+                f'vx={vx_cmd:.3f}, vy={vy_cmd:.3f}, wz={wz:.3f}, '
+                f'counter={self.final_yellow_done_counter}/{self.final_yellow_confirm_count}',
+                throttle_duration_sec=0.2
+            )
 
         elif self.state == self.FINAL_LEFT_JUMP:
             # 障碍物流程内部的最终左跳。
@@ -4463,63 +4678,115 @@ class FourthStageMixin:
 
         elif self.state == self.GLOBAL_FINAL_YELLOW_FORWARD:
             # 右跳后继续前进，同时识别前方横向黄线并用倾斜角修正朝向。
-            # 新逻辑：黄线到达图像下方阈值后不立刻停，继续前进，直到黄线消失再执行最后一次左跳。
+            #
+            # 新逻辑：
+            # 1. 没看到黄线：快速前进
+            # 2. 看到黄线但 bottom_ratio 还没到 slow_start_ratio：快速前进
+            # 3. bottom_ratio >= slow_start_ratio：切换慢速前进
+            # 4. bottom_ratio >= stop_line_y_ratio：认为黄线已经到图像下方区域
+            # 5. 黄线到下方区域后，继续慢速前进，直到横向黄线从画面中消失
+            # 6. 连续消失 global_final_yellow_disappear_confirm_count 帧后，进入最终左跳
+
             final_yellow_line = self.final_yellow_detector.detect(frame)
             self.latest_final_yellow_line = final_yellow_line
 
             if final_yellow_line is None:
                 self.global_final_yellow_done_counter = 0
+
                 if self.global_final_yellow_reached_lower_area:
+                    # 已经确认黄线到过图像下方区域，现在看不到黄线，
+                    # 说明机器狗可能已经越过黄线。
                     self.global_final_yellow_disappear_counter += 1
+
+                    # 这里建议停住等待确认，避免继续冲太远。
                     self.send_motion_cmd(0.0, 0.0, 0.0)
+
                     self.get_logger().info(
                         f'[GLOBAL_FINAL_YELLOW] yellow disappeared after reaching lower area: '
-                        f'disappear_counter={self.global_final_yellow_disappear_counter}/{self.global_final_yellow_disappear_confirm_count}',
+                        f'disappear_counter={self.global_final_yellow_disappear_counter}/'
+                        f'{self.global_final_yellow_disappear_confirm_count}',
                         throttle_duration_sec=0.2
                     )
+
                     if self.global_final_yellow_disappear_counter >= self.global_final_yellow_disappear_confirm_count:
                         self.get_logger().info(
-                            '[GLOBAL_FINAL_YELLOW] yellow passed out of image, execute one final left jump')
+                            '[GLOBAL_FINAL_YELLOW] yellow passed out of image, execute one final left jump'
+                        )
                         self.enter_state(self.GLOBAL_FINAL_LEFT_JUMP)
                         return
+
                 else:
+                    # 还没有确认黄线到达过下方区域。
+                    # 没看到黄线时继续快速前进寻找。
                     self.global_final_yellow_disappear_counter = 0
-                    self.send_motion_cmd(self.global_final_yellow_forward_speed, 0.0, 0.0)
+
+                    vx = self.global_final_yellow_forward_speed
+                    self.send_motion_cmd(vx, 0.0, 0.0)
+
                     self.get_logger().info(
-                        '[GLOBAL_FINAL_YELLOW] no horizontal yellow line before lower-area reached, keep moving forward',
+                        f'[GLOBAL_FINAL_YELLOW] no horizontal yellow line before lower-area reached, '
+                        f'keep moving forward, vx={vx:.3f}',
                         throttle_duration_sec=0.3
                     )
+
             else:
+                # 看到横向黄线
                 self.global_final_yellow_disappear_counter = 0
 
                 bottom_y = int(final_yellow_line.extra.get('bottom_y', 0))
                 bottom_ratio = float(final_yellow_line.extra.get('bottom_ratio', 0.0))
                 angle_deg = float(final_yellow_line.extra.get('angle_deg', 0.0))
+
                 wz = self.compute_final_yellow_wz(final_yellow_line)
+                vx = self.get_global_final_yellow_forward_speed(final_yellow_line)
+
+                reached_slow_area = bottom_ratio >= self.global_final_yellow_slow_start_ratio
                 reached_line = bottom_ratio >= self.global_final_yellow_stop_line_y_ratio
 
                 if reached_line:
+                    # 黄线已经到达图像下方区域
                     self.global_final_yellow_done_counter += 1
+
                     if self.global_final_yellow_done_counter >= self.global_final_yellow_confirm_count:
                         self.global_final_yellow_reached_lower_area = True
-                    self.send_motion_cmd(self.global_final_yellow_forward_speed, 0.0, wz)
+
+                    # 到达下方区域后继续前进，等待黄线消失。
+                    # 这里 vx 会因为 bottom_ratio 已经很大而自动变成慢速。
+                    self.send_motion_cmd(vx, 0.0, wz)
+
                     self.get_logger().info(
                         f'[GLOBAL_FINAL_YELLOW] yellow reached lower area, keep moving until it disappears: '
-                        f'bottom={bottom_y}, ratio={bottom_ratio:.3f}/{self.global_final_yellow_stop_line_y_ratio:.3f}, '
-                        f'angle={angle_deg:.1f}deg, wz={wz:.3f}, '
-                        f'reach_counter={self.global_final_yellow_done_counter}/{self.global_final_yellow_confirm_count}, '
+                        f'bottom={bottom_y}, '
+                        f'ratio={bottom_ratio:.3f}/{self.global_final_yellow_stop_line_y_ratio:.3f}, '
+                        f'slow_start={self.global_final_yellow_slow_start_ratio:.3f}, '
+                        f'slow={reached_slow_area}, '
+                        f'angle={angle_deg:.1f}deg, '
+                        f'vx={vx:.3f}, wz={wz:.3f}, '
+                        f'reach_counter={self.global_final_yellow_done_counter}/'
+                        f'{self.global_final_yellow_confirm_count}, '
                         f'armed={self.global_final_yellow_reached_lower_area}',
                         throttle_duration_sec=0.2
                     )
+
                 else:
+                    # 黄线还没到最终下方阈值
                     self.global_final_yellow_done_counter = 0
-                    self.send_motion_cmd(self.global_final_yellow_forward_speed, 0.0, wz)
+
+                    # 如果 bottom_ratio 已经超过 slow_start_ratio，这里会自动用慢速；
+                    # 否则继续快速靠近。
+                    self.send_motion_cmd(vx, 0.0, wz)
+
                     self.get_logger().info(
                         f'[GLOBAL_FINAL_YELLOW] approach and align: '
-                        f'bottom={bottom_y}, ratio={bottom_ratio:.3f}/{self.global_final_yellow_stop_line_y_ratio:.3f}, '
-                        f'angle={angle_deg:.1f}deg, wz={wz:.3f}',
+                        f'bottom={bottom_y}, '
+                        f'ratio={bottom_ratio:.3f}/{self.global_final_yellow_stop_line_y_ratio:.3f}, '
+                        f'slow_start={self.global_final_yellow_slow_start_ratio:.3f}, '
+                        f'slow={reached_slow_area}, '
+                        f'angle={angle_deg:.1f}deg, '
+                        f'vx={vx:.3f}, wz={wz:.3f}',
                         throttle_duration_sec=0.2
                     )
+
             return
 
         elif self.state == self.GLOBAL_FINAL_LEFT_JUMP:
@@ -4875,6 +5142,7 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('control_hz', 30.0)
         self.declare_parameter('initial_state', 'P1_STAND_WAIT')
+        # self.declare_parameter('initial_state', 'GLOBAL_INITIAL_LATERAL_SHIFT')
         self.declare_parameter('second_stage_initial_state', 'STAGE1_CRUISE_BALL_AND_YELLOW')
 
         # OpenCV 可视化窗口：只用于调试，不参与控制逻辑
@@ -4926,7 +5194,7 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('p1_stop_bottom_ratio', 0.95)
         self.declare_parameter('p1_stop_left_ratio', 0.35)
         self.declare_parameter('p1_stop_right_ratio', 0.65)
-        self.declare_parameter('p1_stop_yellow_pixel_threshold', 1500)
+        self.declare_parameter('p1_stop_yellow_pixel_threshold', 5000)
 
         self.declare_parameter('p1_nav_top_ratio', 0.90)
         self.declare_parameter('p1_nav_bottom_ratio', 1.00)
@@ -4955,7 +5223,9 @@ class CombinedStage1Stage2Node(Node):
         #   使用固定角速度 + 固定仿真时间代替原地左跳，完成后直接进入 STAGE2_CRUISE_YELLOW_ONLY。
         #
         # STAGE2_CRUISE_YELLOW_ONLY:
-        #   第二阶段巡航；只看黄线，不处理橙球。
+        #   第二阶段巡航；主要看黄线，不进入撞球子状态。
+        #   额外检测左侧蓝球/橙球：如果左侧近球靠近图像中心且距离足够近，
+        #   就临时给固定右移 vy，避免机器狗左侧蹭球或撞球。
         #   黄线达到第二阶段阈值时转入 STAGE2_ROTATE_LEFT_90。
         #
         # STAGE2_ROTATE_LEFT_90:
@@ -5096,6 +5366,19 @@ class CombinedStage1Stage2Node(Node):
         self.declare_parameter('stage1_cruise_forward_speed', 0.30)
         self.declare_parameter('stage2_cruise_forward_speed', 0.40)
         self.declare_parameter('stage3_cruise_ball_only_speed', 0.30)
+
+        # =========================
+        # 第二赛段左侧近球固定右避让
+        # =========================
+        # STAGE2_CRUISE_YELLOW_ONLY 本来只看黄线向前走，容易蹭到左侧靠近中线的蓝球/橙球。
+        # 这里不进入撞球子状态，只在危险球连续出现时给固定右移 vy。
+        self.declare_parameter('stage2_left_ball_avoid_enabled', True)
+        self.declare_parameter('stage2_left_ball_avoid_center_px', 130)
+        self.declare_parameter('stage2_left_ball_avoid_depth_m', 0.45)
+        self.declare_parameter('stage2_left_ball_avoid_vy', 0.12)
+        self.declare_parameter('stage2_left_ball_avoid_confirm_frames', 2)
+        self.declare_parameter('stage2_left_ball_avoid_min_radius', 8.0)
+
         self.declare_parameter('stage3_go_scan_speed', 0.30)
         self.declare_parameter('stage3_go_final_speed', 0.40)
 
@@ -5127,7 +5410,7 @@ class CombinedStage1Stage2Node(Node):
         # =========================
         # 对齐球阶段：小 vx + 主 vy
         # =========================
-        self.declare_parameter('lateral_align_forward_speed', 0.115)
+        self.declare_parameter('lateral_align_forward_speed', 0.125)
         self.declare_parameter('lateral_align_vy_gain', 0.30)
         self.declare_parameter('lateral_align_vy_max', 0.30)
         self.declare_parameter('lateral_align_vy_min', 0.10)
@@ -5157,8 +5440,8 @@ class CombinedStage1Stage2Node(Node):
         # 撞击 / 撞后移动
         # =========================
         # 撞击前冲：按仿真时间结束，不再用 TF 距离和 hit_extra_distance_m。
-        self.declare_parameter('hit_forward_speed', 0.10)
-        self.declare_parameter('hit_forward_duration_sec', 0.75)
+        self.declare_parameter('hit_forward_speed', 0.20)
+        self.declare_parameter('hit_forward_duration_sec', 0.7)
 
         # 撞完后左右移动：固定速度 + 固定仿真时间。
         # 不再使用 post_hit_side_shift_distance_m / fast / slow / slowdown_ratio。
@@ -5370,6 +5653,13 @@ class CombinedStage1Stage2Node(Node):
         self.stage1_cruise_forward_speed = float(self.get_parameter('stage1_cruise_forward_speed').value)
         self.stage2_cruise_forward_speed = float(self.get_parameter('stage2_cruise_forward_speed').value)
         self.stage3_cruise_ball_only_speed = float(self.get_parameter('stage3_cruise_ball_only_speed').value)
+
+        self.stage2_left_ball_avoid_enabled = bool(self.get_parameter('stage2_left_ball_avoid_enabled').value)
+        self.stage2_left_ball_avoid_center_px = float(self.get_parameter('stage2_left_ball_avoid_center_px').value)
+        self.stage2_left_ball_avoid_depth_m = float(self.get_parameter('stage2_left_ball_avoid_depth_m').value)
+        self.stage2_left_ball_avoid_vy = abs(float(self.get_parameter('stage2_left_ball_avoid_vy').value))
+        self.stage2_left_ball_avoid_confirm_frames = int(self.get_parameter('stage2_left_ball_avoid_confirm_frames').value)
+        self.stage2_left_ball_avoid_min_radius = float(self.get_parameter('stage2_left_ball_avoid_min_radius').value)
         self.stage3_go_scan_speed = float(self.get_parameter('stage3_go_scan_speed').value)
         self.stage3_go_final_speed = float(self.get_parameter('stage3_go_final_speed').value)
 
@@ -5559,6 +5849,19 @@ class CombinedStage1Stage2Node(Node):
             'left_ref': None,
             'right_ref': None,
             'best_target_ball': None,
+        }
+
+        # 第二赛段左侧近球避让缓存：用于连续帧确认和可视化。
+        self.stage2_left_ball_avoid_counter = 0
+        self.stage2_left_ball_avoid_active = False
+        self.stage2_left_ball_avoid_debug = {
+            'enabled': self.stage2_left_ball_avoid_enabled,
+            'active': False,
+            'counter': 0,
+            'danger_ball': None,
+            'candidate_count': 0,
+            'vy': 0.0,
+            'reason': 'init',
         }
 
         self.latest_yellow_result = {
@@ -6736,6 +7039,123 @@ class CombinedStage1Stage2Node(Node):
         # 两者不冲突，可以同时发送。
         self.send_velocity_command(vx, center_vy, wz)
 
+    def choose_stage2_left_danger_ball(self, ball: Dict) -> Optional[Dict]:
+        """
+        第二赛段左侧近球避让目标选择。
+
+        只使用已经由 detect_ball_scene() 检出的蓝球和橙球，不单独新增视觉检测。
+        触发条件：
+        1. 球在图像中心左侧；
+        2. 球距离图像中心不能太远：image_center_x - cx <= stage2_left_ball_avoid_center_px；
+        3. 球深度足够近：depth_m <= stage2_left_ball_avoid_depth_m；
+        4. 球半径达到最小值，避免小噪声触发。
+        """
+        if not self.stage2_left_ball_avoid_enabled:
+            return None
+        if ball is None or ball.get('img_shape') is None:
+            return None
+
+        h, w = ball['img_shape']
+        image_center_x = w / 2.0
+
+        candidates = []
+        for b in ball.get('orange_balls', []) + ball.get('blue_balls', []):
+            center = b.get('center')
+            depth_m = b.get('depth_m')
+            radius = float(b.get('radius', 0.0))
+            if center is None or depth_m is None:
+                continue
+
+            cx = float(center[0])
+            if cx >= image_center_x:
+                continue
+
+            dist_to_center_px = image_center_x - cx
+            if dist_to_center_px > self.stage2_left_ball_avoid_center_px:
+                continue
+            if float(depth_m) > self.stage2_left_ball_avoid_depth_m:
+                continue
+            if radius < self.stage2_left_ball_avoid_min_radius:
+                continue
+
+            item = dict(b)
+            item['stage2_avoid_dist_to_center_px'] = float(dist_to_center_px)
+            candidates.append(item)
+
+        self.stage2_left_ball_avoid_debug['candidate_count'] = len(candidates)
+
+        if not candidates:
+            return None
+
+        # 优先避让最近的；如果深度接近，再优先避让更靠近图像中心的。
+        return min(candidates, key=lambda b: (float(b.get('depth_m', 999.0)), float(b.get('stage2_avoid_dist_to_center_px', 9999.0))))
+
+    def compute_stage2_left_ball_avoid_vy(self, ball: Dict) -> float:
+        """
+        STAGE2_CRUISE_YELLOW_ONLY 专用：左侧蓝球/橙球靠近路线时，固定向右偏移。
+
+        当前代码约定：vy < 0 通常表示向右移动；如果实测方向反了，
+        只需要把下面 return 的 -abs(...) 改成 +abs(...)，或者把参数值改负后自行扩展。
+        """
+        debug = {
+            'enabled': self.stage2_left_ball_avoid_enabled,
+            'active': False,
+            'counter': self.stage2_left_ball_avoid_counter,
+            'danger_ball': None,
+            'candidate_count': 0,
+            'vy': 0.0,
+            'reason': 'disabled' if not self.stage2_left_ball_avoid_enabled else 'no_danger_ball',
+        }
+        self.stage2_left_ball_avoid_debug = debug
+
+        if not self.stage2_left_ball_avoid_enabled:
+            self.stage2_left_ball_avoid_counter = 0
+            self.stage2_left_ball_avoid_active = False
+            return 0.0
+
+        danger = self.choose_stage2_left_danger_ball(ball)
+        debug['candidate_count'] = self.stage2_left_ball_avoid_debug.get('candidate_count', 0)
+
+        if danger is None:
+            self.stage2_left_ball_avoid_counter = 0
+            self.stage2_left_ball_avoid_active = False
+            debug.update({
+                'active': False,
+                'counter': 0,
+                'danger_ball': None,
+                'vy': 0.0,
+                'reason': 'no_danger_ball',
+            })
+            self.stage2_left_ball_avoid_debug = debug
+            return 0.0
+
+        self.stage2_left_ball_avoid_counter += 1
+        confirm_frames = max(1, int(self.stage2_left_ball_avoid_confirm_frames))
+        active = self.stage2_left_ball_avoid_counter >= confirm_frames
+        self.stage2_left_ball_avoid_active = active
+
+        vy = -abs(self.stage2_left_ball_avoid_vy) if active else 0.0
+        debug.update({
+            'active': active,
+            'counter': self.stage2_left_ball_avoid_counter,
+            'danger_ball': danger,
+            'vy': vy,
+            'reason': 'avoid_right' if active else 'confirming',
+        })
+        self.stage2_left_ball_avoid_debug = debug
+
+        self.get_logger().info(
+            f'[STAGE2_LEFT_BALL_AVOID] danger={danger.get("color")} '
+            f'center={danger.get("center")}, depth={danger.get("depth_m")}, '
+            f'radius={danger.get("radius", 0.0):.1f}, '
+            f'dist_to_center={danger.get("stage2_avoid_dist_to_center_px", 0.0):.1f}/'
+            f'{self.stage2_left_ball_avoid_center_px:.1f}px, '
+            f'counter={self.stage2_left_ball_avoid_counter}/{confirm_frames}, '
+            f'active={active}, vy={vy:.3f}',
+            throttle_duration_sec=0.2
+        )
+        return vy
+
     def compute_yellow_angle_align_wz(self, yellow_result: dict) -> float:
         """
         使用原 detect_yellow_stop_line() 的检测结果做角度矫正。
@@ -6947,6 +7367,36 @@ class CombinedStage1Stage2Node(Node):
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.52,
                     (0, 0, 255),
+                    2
+                )
+
+            # 第二赛段左侧近球避让可视化
+            avoid_debug = getattr(self, 'stage2_left_ball_avoid_debug', {})
+            danger = avoid_debug.get('danger_ball')
+            if danger is not None and danger.get('center') is not None:
+                cx, cy = danger['center']
+                radius = int(max(8, round(float(danger.get('radius', 8)))))
+                color = (0, 0, 255) if avoid_debug.get('active') else (0, 180, 255)
+                cv2.circle(vis, (int(cx), int(cy)), radius + 10, color, 3)
+                cv2.putText(
+                    vis,
+                    f'S2_AVOID {danger.get("color")} active={avoid_debug.get("active")} vy={avoid_debug.get("vy", 0.0):.2f}',
+                    (max(5, int(cx) - 90), min(h - 10, int(cy) + radius + 42)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.50,
+                    color,
+                    2
+                )
+
+            if self.state == 'STAGE2_CRUISE_YELLOW_ONLY':
+                cv2.putText(
+                    vis,
+                    f'S2 left-ball avoid: {avoid_debug.get("reason", "none")} '
+                    f'cnt={avoid_debug.get("counter", 0)} vy={avoid_debug.get("vy", 0.0):.2f}',
+                    (10, 108),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.52,
+                    (0, 0, 255) if avoid_debug.get('active') else (0, 180, 255),
                     2
                 )
 
@@ -7782,7 +8232,11 @@ class CombinedStage1Stage2Node(Node):
                 self.yellow_slowdown_ratio_stage2
             )
             wz = self.compute_yellow_angle_align_wz(yellow)
-            self.send_velocity_command(vx, 0.0, wz)
+
+            # 第二赛段不进入撞球逻辑，但会检查左侧蓝球/橙球是否过近。
+            # 如果左侧近球靠近图像中心，就给固定右移 vy，避免左侧擦碰。
+            avoid_vy = self.compute_stage2_left_ball_avoid_vy(ball)
+            self.send_velocity_command(vx, avoid_vy, wz)
             return
 
         if self.state == 'STAGE3_CRUISE_BALL_ONLY':
