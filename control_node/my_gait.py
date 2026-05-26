@@ -216,7 +216,7 @@ class Robot_Ctrl(object):
 
     def Wait_finish(self, mode, gait_id):
         count = 0
-        while self.runing and count < 2000: #10s
+        while self.runing and count < 20000: #100s
             if self.mode_ok == mode and self.gait_ok == gait_id:
                 return True
             else:

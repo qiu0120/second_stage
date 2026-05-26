@@ -20,8 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'control_node = second_stage.control_node:main',
-            'my_gait = second_stage.my_gait:main',
+            'control_node = control_node.control_node:main',
+            'my_gait = control_node.my_gait:main',
         ],
     },
 )

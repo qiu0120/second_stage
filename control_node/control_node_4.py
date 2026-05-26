@@ -1255,7 +1255,7 @@ class ObstacleDashedTaskNode(Node):
         # 调试用：当 initial_state 需要依赖 dashed_side 时，可手动指定。
         # 可选值：'auto' / 'left' / 'right'
         # auto 表示正常流程里由视觉第一次看到虚线时自动记录。
-        self.declare_parameter('debug_dashed_side', 'auto')
+        self.declare_parameter('debug_dashed_side', 'left')
 
         # ============================================================
         # 全局整合流程参数
